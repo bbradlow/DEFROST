@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   newRow,
   type EmailRow as Row,
-  type FreeModel,
+  type ModelOption,
   type Writer,
   type StylePrompt,
   type FoundersResult,
@@ -14,8 +14,10 @@ import { parseCsv } from "@/lib/csv";
 import { EmailRow } from "@/components/EmailRow";
 import { OutputAccordion } from "@/components/OutputAccordion";
 
-// Free models cap ~20 req/min. ~3.5s between calls keeps us safely under.
-const THROTTLE_MS = 3500;
+// Paid tiers allow far higher throughput than the free 20/min cap, so we only
+// need a light throttle to stay polite. The backoff still covers any free model
+// (or the free router) that returns a 429.
+const THROTTLE_MS = 400;
 const RATE_LIMIT_BACKOFF_MS = 9000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -38,7 +40,7 @@ export function GeneratorGrid({
   stylePrompts: StylePrompt[];
 }) {
   const [rows, setRows] = useState<Row[]>([newRow()]);
-  const [models, setModels] = useState<FreeModel[]>([]);
+  const [models, setModels] = useState<ModelOption[]>([]);
   const [model, setModel] = useState<string>("openrouter/free");
   const [modelsErr, setModelsErr] = useState<string | null>(null);
   const [modelsLoading, setModelsLoading] = useState(true);
@@ -123,7 +125,7 @@ export function GeneratorGrid({
         const res = await fetch("/api/models");
         const json = await res.json();
         if (!res.ok) throw new Error(json.error ?? "Failed to load models");
-        const list: FreeModel[] = json.models ?? [];
+        const list: ModelOption[] = json.models ?? [];
         setModels(list);
         // Keep the current selection (possibly a restored default) if it's
         // still valid; otherwise fall back to the first option (free router).
@@ -343,7 +345,7 @@ export function GeneratorGrid({
         <div className="grid gap-4 md:grid-cols-2">
           {/* Model */}
           <div>
-            <label className="field-label mb-1 block">Model (free only)</label>
+            <label className="field-label mb-1 block">Model</label>
             <div className="flex gap-2">
               <select
                 className="inp"
@@ -354,8 +356,8 @@ export function GeneratorGrid({
                 {modelsLoading && <option>Loading models…</option>}
                 {models.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.name}
-                    {m.contextLength ? ` (${Math.round(m.contextLength / 1000)}k ctx)` : ""}
+                    {m.name} · {m.priceLabel}
+                    {m.contextLength ? ` · ${Math.round(m.contextLength / 1000)}k` : ""}
                   </option>
                 ))}
               </select>
@@ -376,13 +378,14 @@ export function GeneratorGrid({
                 <span className="text-ink-soft">
                   {models.find((m) => m.id === defaultModel)?.name ?? defaultModel}
                 </span>
-                {model === defaultModel ? " (in use)" : ""}. Falls back to the free
-                router if a model errors.
+                {model === defaultModel ? " (in use)" : ""}. Paid models bill your
+                OpenRouter credits; prices are per 1M tokens.
               </p>
             ) : (
               <p className="mt-1 text-xs text-ink-faint">
-                Live list, filtered to free models. &ldquo;Set default&rdquo; remembers
-                your pick for next time. Falls back to the free router if a model errors.
+                Free and paid models (prices per 1M tokens). &ldquo;Set default&rdquo;
+                remembers your pick. Paid usage bills your OpenRouter credits; falls
+                back to the free router if a model errors.
               </p>
             )}
           </div>
