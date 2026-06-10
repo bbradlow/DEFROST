@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  background: theme("colors.paper");
+  color: theme("colors.ink.DEFAULT");
+}
+
+body {
+  font-feature-settings: "cv05", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Utility face for labels: small, uppercase, tracked — the structural voice
+   of the tool (a workhorse data grid). */
+.eyebrow {
+  font-family: theme("fontFamily.mono");
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: theme("colors.ink.faint");
+}
+
+.field-label {
+  font-family: theme("fontFamily.mono");
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: theme("colors.ink.faint");
+}
+
+/* Inputs share one quiet style so the grid reads as a single instrument. */
+.inp {
+  @apply w-full rounded border border-line bg-white px-2.5 py-1.5 text-sm text-ink
+         outline-none transition-colors;
+}
+.inp:focus {
+  @apply border-accent ring-2 ring-accent/15;
+}
+.inp::placeholder {
+  @apply text-ink-faint/60;
+}
+
+.btn {
+  @apply inline-flex items-center justify-center gap-1.5 rounded border px-3 py-1.5
+         text-sm font-medium transition-colors disabled:cursor-not-allowed
+         disabled:opacity-50;
+}
+.btn-primary {
+  @apply bg-accent text-white border-accent hover:bg-accent-ink;
+}
+.btn-ghost {
+  @apply bg-white text-ink-soft border-line hover:border-ink-faint hover:text-ink;
+}
+.btn-danger {
+  @apply bg-white text-flag border-flagsoft hover:bg-flagsoft;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

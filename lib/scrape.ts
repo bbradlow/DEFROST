@@ -1,0 +1,123 @@
+/**
+ * Best-effort website fetch + readable-text extraction. Runs server-side only.
+ *
+ * We do a plain HTTP fetch (no headless browser), so JS-heavy single-page apps
+ * may return very little usable text. Callers should treat a short result as a
+ * weak signal and let the user fill recipients in manually.
+ */
+
+function normalizeUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  let url = trimmed;
+  if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+  try {
+    const parsed = new URL(url);
+    // Block obvious SSRF targets (localhost / private ranges by hostname).
+    const host = parsed.hostname;
+    if (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host.endsWith(".local") ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^169\.254\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    ) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function stripHtml(html: string): string {
+  return (
+    html
+      // remove non-content elements wholesale
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+      .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      // turn block boundaries into spaces
+      .replace(/<\/(p|div|li|h[1-6]|section|article|br)>/gi, " \n")
+      .replace(/<[^>]+>/g, " ")
+      // decode a few common entities
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&#39;|&rsquo;|&lsquo;/g, "'")
+      .replace(/&quot;|&ldquo;|&rdquo;/g, '"')
+      // collapse whitespace
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n\s*\n\s*\n+/g, "\n\n")
+      .trim()
+  );
+}
+
+export type ScrapeResult = {
+  ok: boolean;
+  text: string;
+  weak: boolean;
+  note?: string;
+};
+
+export async function scrapeWebsite(rawUrl: string): Promise<ScrapeResult> {
+  const url = normalizeUrl(rawUrl);
+  if (!url) {
+    return { ok: false, text: "", weak: true, note: "Invalid or blocked URL." };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12_000);
+
+    const res = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (compatible; ColdOutreachGen/1.0; +https://openrouter.ai)",
+        Accept: "text/html,application/xhtml+xml",
+      },
+    }).finally(() => clearTimeout(timeout));
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        text: "",
+        weak: true,
+        note: `Site returned HTTP ${res.status}.`,
+      };
+    }
+
+    const ctype = res.headers.get("content-type") ?? "";
+    if (!ctype.includes("html") && !ctype.includes("text")) {
+      return {
+        ok: false,
+        text: "",
+        weak: true,
+        note: "Site did not return HTML.",
+      };
+    }
+
+    const html = await res.text();
+    const text = stripHtml(html);
+    const weak = text.length < 400;
+    return {
+      ok: true,
+      text,
+      weak,
+      note: weak
+        ? "Extracted very little text (likely a JS-heavy site). Add recipients manually."
+        : undefined,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "fetch failed";
+    return { ok: false, text: "", weak: true, note: `Could not fetch site: ${msg}` };
+  }
+}
