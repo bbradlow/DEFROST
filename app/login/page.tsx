@@ -141,7 +141,7 @@ function LoginForm() {
 
         <p className="mt-4 text-center text-xs text-ink-faint">
           The signed-in user is the <strong>owner</strong>. Writers (senders)
-          are managed inside the app.
+          are managed inside the app. Made by <strong>Ben Bradlow</strong> 06102026.
         </p>
       </div>
     </main>
