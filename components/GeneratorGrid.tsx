@@ -25,6 +25,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const LS_BASE_PROMPT = "co:basePrompt";
 const LS_STYLE_PROMPT_ID = "co:stylePromptId";
 const LS_DEFAULT_MODEL = "co:defaultModel";
+const LS_ROWS = "co:rows";
 
 // Style-prompt selection sentinels (saved prompts use their uuid).
 const DEFAULT_PROMPT_ID = "__default__";
@@ -95,6 +96,27 @@ export function GeneratorGrid({
         setDefaultModel(dm);
         setModel(dm); // validated against the live list once it loads
       }
+
+      // Restore the in-progress rows (inputs + any generated bodies) so work
+      // survives switching tabs or reloading. Reset any transient status that
+      // was mid-flight when the page unmounted.
+      const rawRows = localStorage.getItem(LS_ROWS);
+      if (rawRows) {
+        const parsed = JSON.parse(rawRows) as Row[];
+        if (Array.isArray(parsed) && parsed.length) {
+          const restored = parsed.map((r) => ({
+            ...newRow(),
+            ...r,
+            status:
+              r.status === "generating" || r.status === "finding"
+                ? r.body && r.body.trim()
+                  ? ("done" as const)
+                  : ("idle" as const)
+                : r.status,
+          }));
+          setRows(restored);
+        }
+      }
     } catch {
       /* localStorage unavailable — fall back to in-memory defaults */
     }
@@ -115,6 +137,17 @@ export function GeneratorGrid({
       localStorage.setItem(LS_STYLE_PROMPT_ID, stylePromptId);
     } catch {}
   }, [stylePromptId, loaded]);
+
+  // Persist the rows (all inputs + generated bodies) so navigating between tabs
+  // or reloading never loses work.
+  useEffect(() => {
+    if (!loaded) return;
+    try {
+      localStorage.setItem(LS_ROWS, JSON.stringify(rows));
+    } catch {
+      /* over quota or unavailable — skip; in-memory state still works */
+    }
+  }, [rows, loaded]);
 
   // Load the live free-model list once.
   useEffect(() => {
@@ -488,6 +521,19 @@ export function GeneratorGrid({
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <button className="btn btn-ghost" onClick={addRow} disabled={busy}>
           + Add row
+        </button>
+        <button
+          className="btn btn-ghost"
+          onClick={() => {
+            if (rows.some((r) => r.company || r.website || r.additionalInfo || r.body)) {
+              if (!confirm("Clear all rows and start a fresh batch?")) return;
+            }
+            setRows([newRow()]);
+            setBanner(null);
+          }}
+          disabled={busy}
+        >
+          Clear all
         </button>
         <button
           className="btn btn-ghost"
