@@ -28,17 +28,31 @@ type RawModel = {
   name?: string;
   context_length?: number;
   pricing?: { prompt?: string; completion?: string };
+  architecture?: { output_modalities?: string[] };
 };
 
+function perMillion(x: string | undefined): number {
+  const n = parseFloat(x ?? "");
+  return Number.isFinite(n) ? n * 1_000_000 : NaN;
+}
+
+function fmtPrice(perM: number): string {
+  if (!Number.isFinite(perM)) return "?";
+  if (perM === 0) return "$0";
+  if (perM < 0.1) return `$${perM.toFixed(3)}`;
+  return `$${perM.toFixed(2)}`;
+}
+
 /**
- * Fetch the live model list and keep only free ones. "Free" = id ends with
- * ":free" OR both prompt and completion pricing parse to 0. The free-router
- * (openrouter/free) is prepended so it's always selectable.
+ * Fetch the live model list. Includes both free and paid models (a paid
+ * OpenRouter key bills usage against your credit balance). Each entry is
+ * labelled with its price per 1M tokens. Non-text models (image/audio/etc.)
+ * are filtered out. Free models are listed first; the free auto-router is
+ * always prepended as a zero-cost option and remains the error fallback.
  */
-export async function listFreeModels() {
+export async function listModels() {
   const res = await fetch(`${BASE}/models`, {
     headers: headers(),
-    // models change often; cache briefly at the edge
     next: { revalidate: 300 },
   });
   if (!res.ok) {
@@ -47,29 +61,47 @@ export async function listFreeModels() {
   const json = (await res.json()) as { data?: RawModel[] };
   const data = json.data ?? [];
 
-  const isFree = (m: RawModel) => {
-    if (m.id?.endsWith(":free")) return true;
-    const p = parseFloat(m.pricing?.prompt ?? "x");
-    const c = parseFloat(m.pricing?.completion ?? "x");
-    return Number.isFinite(p) && Number.isFinite(c) && p === 0 && c === 0;
+  // Keep only models that can output text (drops image/audio/embedding models).
+  const outputsText = (m: RawModel) => {
+    const out = m.architecture?.output_modalities;
+    return Array.isArray(out) ? out.includes("text") : true;
   };
 
-  const free = data
-    .filter(isFree)
-    .map((m) => ({
-      id: m.id,
-      name: m.name ?? m.id,
-      contextLength: m.context_length ?? null,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const models = data
+    .filter(outputsText)
+    .map((m) => {
+      const pIn = perMillion(m.pricing?.prompt);
+      const pOut = perMillion(m.pricing?.completion);
+      const free =
+        m.id.endsWith(":free") ||
+        (Number.isFinite(pIn) && Number.isFinite(pOut) && pIn === 0 && pOut === 0);
+      const priceLabel = free
+        ? "Free"
+        : Number.isFinite(pIn) && Number.isFinite(pOut)
+          ? `${fmtPrice(pIn)}/${fmtPrice(pOut)} per 1M`
+          : "Paid";
+      return {
+        id: m.id,
+        name: m.name ?? m.id,
+        contextLength: m.context_length ?? null,
+        free,
+        priceLabel,
+      };
+    })
+    // Free first, then alphabetical by name.
+    .sort((a, b) =>
+      a.free === b.free ? a.name.localeCompare(b.name) : a.free ? -1 : 1,
+    );
 
   return [
     {
       id: FREE_ROUTER_ID,
       name: "Free Models Router (auto-picks a free model)",
       contextLength: null as number | null,
+      free: true,
+      priceLabel: "Free",
     },
-    ...free,
+    ...models,
   ];
 }
 

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { listFreeModels } from "@/lib/openrouter";
+import { listModels } from "@/lib/openrouter";
 
 export async function GET() {
   // Gate behind auth — only signed-in owners can hit OpenRouter through us.
@@ -13,7 +13,7 @@ export async function GET() {
   }
 
   try {
-    const models = await listFreeModels();
+    const models = await listModels();
     return NextResponse.json({ models });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load models";

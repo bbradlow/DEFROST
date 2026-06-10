@@ -46,10 +46,12 @@ export type EmailRow = {
   siteContext?: string;
 };
 
-export type FreeModel = {
+export type ModelOption = {
   id: string;
   name: string;
   contextLength: number | null;
+  free: boolean;
+  priceLabel: string; // "Free" or e.g. "$0.50/$1.50 per 1M"
 };
 
 // Shape returned by /api/founders
