@@ -49,7 +49,7 @@ function LinkedText({ text }: { text: string }) {
             href={p.href}
             target="_blank"
             rel="noopener noreferrer"
-            className="break-words text-accent-ink underline underline-offset-2 hover:text-accent"
+            className="break-words text-accent underline underline-offset-2 hover:text-accent-ink"
           >
             {p.value}
           </a>

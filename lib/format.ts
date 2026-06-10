@@ -1,5 +1,5 @@
 import type { EmailRow } from "./types";
-import { linkifyToHtml } from "./linkify";
+import { linkifyToHtml, linkifyToPlain } from "./linkify";
 
 /**
  * The address line for an email: comma-separated recipient EMAILS if any are
@@ -15,7 +15,8 @@ export function addressLine(row: EmailRow): string {
 /** A single email block: address line, then body directly below. */
 export function emailBlock(row: EmailRow): string {
   const addr = addressLine(row);
-  return addr ? `${addr}\n${row.body}` : row.body;
+  const body = linkifyToPlain(row.body);
+  return addr ? `${addr}\n${body}` : body;
 }
 
 /**
