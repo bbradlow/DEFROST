@@ -16,7 +16,7 @@ const mono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Cold Outreach Generator",
+  title: "Activant · Cold Outreach",
   description: "Generate personalized cold outreach emails in a writer's voice.",
 };
 

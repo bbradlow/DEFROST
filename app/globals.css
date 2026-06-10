@@ -59,7 +59,7 @@ body {
   @apply bg-white text-ink-soft border-line hover:border-ink-faint hover:text-ink;
 }
 .btn-danger {
-  @apply bg-white text-flag border-flagsoft hover:bg-flagsoft;
+  @apply bg-white text-flag border-flag/25 hover:bg-flag hover:text-white hover:border-flag;
 }
 
 @media (prefers-reduced-motion: reduce) {
