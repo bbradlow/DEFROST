@@ -59,7 +59,14 @@ function LoginForm() {
     <main className="flex min-h-screen items-center justify-center px-6">
       <div className="w-full max-w-sm">
         <div className="mb-8">
-          <p className="eyebrow mb-2">Outbound</p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/activant-logo-blue.png"
+            alt="Activant"
+            width={888}
+            height={150}
+            className="mb-5 h-6 w-auto"
+          />
           <h1 className="text-2xl font-semibold tracking-tight text-ink">
             Cold Outreach Generator
           </h1>
