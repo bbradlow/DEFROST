@@ -9,9 +9,10 @@ type Draft = {
   email: string;
   title: string;
   signature: string;
+  calendly: string;
 };
 
-const emptyDraft: Draft = { name: "", email: "", title: "", signature: "" };
+const emptyDraft: Draft = { name: "", email: "", title: "", signature: "", calendly: "" };
 
 export function WritersAdmin({
   initialWriters,
@@ -48,6 +49,7 @@ export function WritersAdmin({
         email: draft.email.trim(),
         title: draft.title.trim() || null,
         signature: draft.signature.trim() || null,
+        calendly: draft.calendly.trim() || null,
       };
 
       if (editingId) {
@@ -94,6 +96,7 @@ export function WritersAdmin({
       email: w.email,
       title: w.title ?? "",
       signature: w.signature ?? "",
+      calendly: w.calendly ?? "",
     });
     setErr(null);
   }
@@ -132,6 +135,11 @@ export function WritersAdmin({
                   <p className="truncate font-mono text-xs text-ink-faint">
                     {w.email}
                   </p>
+                  {w.calendly ? (
+                    <p className="truncate font-mono text-xs text-accent">
+                      {w.calendly}
+                    </p>
+                  ) : null}
                   {w.signature ? (
                     <pre className="mt-2 whitespace-pre-wrap font-sans text-xs text-ink-soft">
                       {w.signature}
@@ -185,6 +193,17 @@ export function WritersAdmin({
             onChange={(e) => setDraft({ ...draft, title: e.target.value })}
             placeholder="Analyst"
           />
+
+          <label className="field-label mb-1 block">Scheduling link (optional)</label>
+          <input
+            className="inp mb-1"
+            value={draft.calendly}
+            onChange={(e) => setDraft({ ...draft, calendly: e.target.value })}
+            placeholder="https://calendly.com/jordan/intro"
+          />
+          <p className="mb-3 text-[11px] text-ink-faint">
+            Added to the call to action and rendered as a clickable link in the email.
+          </p>
 
           <label className="field-label mb-1 block">Signature (optional)</label>
           <textarea
