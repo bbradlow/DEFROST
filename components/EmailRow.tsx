@@ -3,15 +3,23 @@
 import type { EmailRow as Row, Recipient, Writer } from "@/lib/types";
 
 function StatusPill({ row }: { row: Row }) {
-  const map: Record<Row["status"], { label: string; cls: string }> = {
-    idle: { label: "Ready", cls: "text-ink-faint" },
-    finding: { label: "Finding recipients…", cls: "text-accent-ink" },
-    generating: { label: "Generating…", cls: "text-accent-ink" },
-    done: { label: "Generated", cls: "text-accent-ink" },
-    error: { label: "Error", cls: "text-flag" },
+  const map: Record<
+    Row["status"],
+    { label: string; text: string; dot: string | null }
+  > = {
+    idle: { label: "Ready", text: "text-ink-faint", dot: null },
+    finding: { label: "Finding recipients…", text: "text-accent", dot: "bg-accent" },
+    generating: { label: "Generating…", text: "text-accent", dot: "bg-accent" },
+    done: { label: "Generated", text: "text-ink-soft", dot: "bg-success" },
+    error: { label: "Error", text: "text-flag", dot: "bg-flag" },
   };
   const s = map[row.status];
-  return <span className={`font-mono text-[11px] ${s.cls}`}>{s.label}</span>;
+  return (
+    <span className={`inline-flex items-center gap-1.5 font-mono text-[11px] ${s.text}`}>
+      {s.dot && <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} aria-hidden />}
+      {s.label}
+    </span>
+  );
 }
 
 export function EmailRow({

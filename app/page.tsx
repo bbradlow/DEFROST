@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { TopBar } from "@/components/TopBar";
 import { GeneratorGrid } from "@/components/GeneratorGrid";
-import type { Writer } from "@/lib/types";
+import type { Writer, StylePrompt } from "@/lib/types";
 
 export default async function Home() {
   const supabase = await createClient();
@@ -11,10 +11,13 @@ export default async function Home() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const { data } = await supabase
-    .from("writers")
-    .select("*")
-    .order("created_at", { ascending: true });
+  const [{ data: writers }, { data: stylePrompts }] = await Promise.all([
+    supabase.from("writers").select("*").order("created_at", { ascending: true }),
+    supabase
+      .from("style_prompts")
+      .select("*")
+      .order("created_at", { ascending: true }),
+  ]);
 
   return (
     <>
@@ -31,7 +34,10 @@ export default async function Home() {
             whole batch for your analyst.
           </p>
         </div>
-        <GeneratorGrid writers={(data ?? []) as Writer[]} />
+        <GeneratorGrid
+          writers={(writers ?? []) as Writer[]}
+          stylePrompts={(stylePrompts ?? []) as StylePrompt[]}
+        />
       </main>
     </>
   );

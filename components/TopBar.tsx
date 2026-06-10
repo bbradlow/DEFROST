@@ -5,48 +5,55 @@ export function TopBar({
   active,
 }: {
   ownerEmail: string;
-  active: "generator" | "writers";
+  active: "generator" | "writers" | "prompts";
 }) {
+  const linkCls = (key: string) =>
+    `rounded px-2.5 py-1 transition-colors ${
+      active === key
+        ? "bg-white/12 text-white"
+        : "text-white/65 hover:bg-white/[0.06] hover:text-white"
+    }`;
+
   return (
-    <header className="sticky top-0 z-20 border-b border-line bg-paper/85 backdrop-blur">
+    <header className="sticky top-0 z-20 border-b border-white/10 bg-brand-dark">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-3">
-        <div className="flex items-center gap-6">
-          <Link href="/" className="flex items-baseline gap-2">
-            <span className="text-sm font-semibold tracking-tight text-ink">
-              Cold Outreach
+        <div className="flex items-center gap-5">
+          <Link href="/" className="flex items-center gap-3" aria-label="Activant — Outreach home">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/activant-logo-white.png"
+              alt="Activant"
+              width={888}
+              height={150}
+              className="h-[20px] w-auto"
+            />
+            <span className="h-4 w-px bg-white/20" aria-hidden />
+            <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-white/70">
+              DEFROST
             </span>
-            <span className="eyebrow">generator</span>
           </Link>
           <nav className="flex items-center gap-1 text-sm">
-            <Link
-              href="/"
-              className={`rounded px-2.5 py-1 transition-colors ${
-                active === "generator"
-                  ? "bg-accent-soft text-accent-ink"
-                  : "text-ink-soft hover:bg-accent-soft/60"
-              }`}
-            >
+            <Link href="/" className={linkCls("generator")}>
               Generator
             </Link>
-            <Link
-              href="/writers"
-              className={`rounded px-2.5 py-1 transition-colors ${
-                active === "writers"
-                  ? "bg-accent-soft text-accent-ink"
-                  : "text-ink-soft hover:bg-accent-soft/60"
-              }`}
-            >
+            <Link href="/writers" className={linkCls("writers")}>
               Writers
+            </Link>
+            <Link href="/prompts" className={linkCls("prompts")}>
+              Prompts
             </Link>
           </nav>
         </div>
 
         <div className="flex items-center gap-3">
-          <span className="hidden text-xs text-ink-faint sm:inline">
-            owner: <span className="text-ink-soft">{ownerEmail}</span>
+          <span className="hidden text-xs text-white/45 sm:inline">
+            owner: <span className="text-white/80">{ownerEmail}</span>
           </span>
           <form action="/auth/signout" method="post">
-            <button className="btn btn-ghost py-1 text-xs" type="submit">
+            <button
+              className="rounded border border-white/20 px-3 py-1 text-xs font-medium text-white/80 transition-colors hover:bg-white/10 hover:text-white"
+              type="submit"
+            >
               Sign out
             </button>
           </form>
