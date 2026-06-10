@@ -30,8 +30,22 @@ const COMBINED = new RegExp(
 
 const TRAILING = /[.,;:!?]+$/;
 
+/**
+ * Models frequently ignore Markdown and instead write a proper-noun label
+ * followed by a parenthesized URL: "Activant Capital (https://activant.com)".
+ * Normalize that into a Markdown link so the label renders as clean, clickable
+ * text with the URL hidden. We only consume a short run (1–5) of leading
+ * Capitalized words as the label, so ordinary parentheticals are left alone.
+ */
+const LABELED_PAREN =
+  /\b([A-Z][\w&.'’-]*(?:\s+[A-Z][\w&.'’-]*){0,4})\s+\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g;
+
+function normalizeLabeledLinks(text: string): string {
+  return text.replace(LABELED_PAREN, (_m, label: string, url: string) => `[${label}](${url})`);
+}
+
 export function linkifyParts(input: string): LinkPart[] {
-  const text = input ?? "";
+  const text = normalizeLabeledLinks(input ?? "");
   const parts: LinkPart[] = [];
   let last = 0;
 
