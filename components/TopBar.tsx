@@ -5,7 +5,7 @@ export function TopBar({
   active,
 }: {
   ownerEmail: string;
-  active: "generator" | "writers";
+  active: "generator" | "writers" | "prompts";
 }) {
   return (
     <header className="sticky top-0 z-20 border-b border-line bg-paper/85 backdrop-blur">
@@ -37,6 +37,16 @@ export function TopBar({
               }`}
             >
               Writers
+            </Link>
+            <Link
+              href="/prompts"
+              className={`rounded px-2.5 py-1 transition-colors ${
+                active === "prompts"
+                  ? "bg-accent-soft text-accent-ink"
+                  : "text-ink-soft hover:bg-accent-soft/60"
+              }`}
+            >
+              Prompts
             </Link>
           </nav>
         </div>

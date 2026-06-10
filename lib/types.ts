@@ -8,6 +8,14 @@ export type Writer = {
   created_at: string;
 };
 
+export type StylePrompt = {
+  id: string;
+  owner_id: string;
+  name: string;
+  body: string;
+  created_at: string;
+};
+
 export type Recipient = {
   name: string;
   email: string; // filled in after generation; may be blank
