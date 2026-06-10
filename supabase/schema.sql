@@ -15,6 +15,7 @@ create table if not exists public.writers (
   email       text not null,
   title       text,
   signature   text,
+  calendly    text,
   created_at  timestamptz not null default now()
 );
 

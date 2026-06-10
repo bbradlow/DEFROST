@@ -24,6 +24,12 @@ function clean(s?: string | null) {
   return (s ?? "").trim();
 }
 
+/** Ensure a URL has a scheme so it renders as a clickable link. */
+function ensureScheme(url: string): string {
+  if (!url) return url;
+  return /^https?:\/\//i.test(url) ? url : `https://${url}`;
+}
+
 /** Builds the system message: base style + how to sign off as this writer. */
 export function buildSystemPrompt(basePrompt: string, writer: Writer): string {
   const lines = [
@@ -45,6 +51,17 @@ export function buildSystemPrompt(basePrompt: string, writer: Writer): string {
       }.`,
     );
   }
+
+  if (clean(writer.calendly)) {
+    const url = ensureScheme(clean(writer.calendly));
+    lines.push(
+      "",
+      "Call to action — scheduling link:",
+      `- End the email by inviting the recipient to book a short call, and include this exact scheduling link: my Calendly (${url})`,
+      "- Use that URL verbatim. Do not alter, shorten, or replace it, and do not invent a different scheduling link.",
+    );
+  }
+
   return lines.join("\n");
 }
 

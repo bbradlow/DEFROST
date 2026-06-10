@@ -5,6 +5,7 @@ export type Writer = {
   email: string;
   title: string | null;
   signature: string | null;
+  calendly: string | null;
   created_at: string;
 };
 
