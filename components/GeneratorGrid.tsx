@@ -61,6 +61,8 @@ export function GeneratorGrid({
   const [bulkWriterId, setBulkWriterId] = useState<string>("");
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
+  const [companyList, setCompanyList] = useState("");
+  const [showList, setShowList] = useState(false);
 
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -223,6 +225,69 @@ export function GeneratorGrid({
     setRows((rs) => rs.map((r) => ({ ...r, writerId: bulkWriterId, csvIssue: undefined })));
   }
 
+  // ---- Company list -> rows / CSV ------------------------------------------
+  // Each line is "Company" or "Company, website" (comma or tab separated).
+  function parseCompanyLines(text: string): { company: string; website: string }[] {
+    return text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const parts = line.split(/[\t,]/).map((p) => p.trim());
+        return { company: parts[0] ?? "", website: parts[1] ?? "" };
+      })
+      .filter((x) => x.company);
+  }
+
+  function addFromList() {
+    const parsed = parseCompanyLines(companyList);
+    if (!parsed.length) {
+      setBanner("Enter at least one company name (one per line).");
+      return;
+    }
+    const created = parsed.map((p) =>
+      newRow({
+        company: p.company,
+        website: p.website,
+        writerId: bulkWriterId || null,
+      }),
+    );
+    setRows((rs) => {
+      const onlyBlank =
+        rs.length === 1 &&
+        !rs[0].company &&
+        !rs[0].website &&
+        !rs[0].additionalInfo &&
+        !rs[0].body;
+      return onlyBlank ? created : [...rs, ...created];
+    });
+    setCompanyList("");
+    setShowList(false);
+    setBanner(`Added ${created.length} row${created.length === 1 ? "" : "s"} from your list.`);
+  }
+
+  function listToCsv(): string {
+    const parsed = parseCompanyLines(companyList);
+    const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+    const header = "company,website,recipients,additional_info";
+    const lines = parsed.map((p) => [esc(p.company), esc(p.website), "", ""].join(","));
+    return [header, ...lines].join("\n");
+  }
+
+  async function copyListCsv() {
+    const parsed = parseCompanyLines(companyList);
+    if (!parsed.length) {
+      setBanner("Enter at least one company name first.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(listToCsv());
+      setBanner("CSV copied to clipboard.");
+    } catch {
+      setBanner("Couldn't copy — your browser blocked clipboard access.");
+    }
+  }
+
   // ---- Recipient extraction ------------------------------------------------
   async function findRecipients(id: string): Promise<void> {
     const row = rowsRef.current.find((r) => r.id === id);
@@ -240,7 +305,9 @@ export function GeneratorGrid({
         throw new Error("RATE_LIMIT");
       }
       const recipients =
-        data.recipients?.slice(0, 2).map((r) => ({ name: r.name, email: "" })) ?? [];
+        data.recipients
+          ?.slice(0, 2)
+          .map((r) => ({ name: r.name, email: r.email ?? "" })) ?? [];
       patchRow(id, {
         status: "idle",
         recipients: recipients.length ? recipients : row.recipients,
@@ -545,6 +612,13 @@ export function GeneratorGrid({
         >
           Import CSV
         </button>
+        <button
+          className="btn btn-ghost"
+          onClick={() => setShowList((s) => !s)}
+          disabled={busy}
+        >
+          {showList ? "Hide company list" : "Paste company list"}
+        </button>
         <input
           ref={fileRef}
           type="file"
@@ -571,6 +645,35 @@ export function GeneratorGrid({
           {busy ? "Working…" : "Generate all"}
         </button>
       </div>
+
+      {/* Company list -> rows */}
+      {showList && (
+        <div className="mb-4 rounded-lg border border-line bg-panel p-4">
+          <label className="field-label mb-1 block">
+            Paste a company list (one per line)
+          </label>
+          <p className="mb-2 text-xs text-ink-faint">
+            Just company names, or <span className="font-mono">Company, website</span>{" "}
+            per line. Each becomes a row (company, website, recipients, additional
+            info) — no writer needed. Use &ldquo;Set one writer for all&rdquo; after,
+            then Auto-fill recipients.
+          </p>
+          <textarea
+            className="inp h-36 resize-y font-mono text-xs"
+            value={companyList}
+            onChange={(e) => setCompanyList(e.target.value)}
+            placeholder={"Northflank, northflank.com\nMetronome\nAirwallex, airwallex.com"}
+          />
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button className="btn btn-primary" onClick={addFromList}>
+              Add as rows
+            </button>
+            <button className="btn btn-ghost" onClick={copyListCsv}>
+              Copy as CSV
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Progress / banner */}
       {progress && (

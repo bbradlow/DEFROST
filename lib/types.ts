@@ -56,7 +56,7 @@ export type ModelOption = {
 
 // Shape returned by /api/founders
 export type FoundersResult = {
-  recipients: { name: string; role?: string }[];
+  recipients: { name: string; role?: string; email?: string }[];
   siteContext: string;
   weak: boolean;
   note?: string;

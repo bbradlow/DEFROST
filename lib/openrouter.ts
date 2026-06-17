@@ -107,11 +107,15 @@ export async function listModels() {
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
-async function rawChat(model: string, messages: ChatMessage[]) {
+async function rawChat(
+  model: string,
+  messages: ChatMessage[],
+  temperature = 0.7,
+) {
   const res = await fetch(`${BASE}/chat/completions`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ model, messages, temperature: 0.7 }),
+    body: JSON.stringify({ model, messages, temperature }),
   });
 
   const json = await res.json().catch(() => null);
@@ -135,16 +139,17 @@ async function rawChat(model: string, messages: ChatMessage[]) {
 export async function chatWithFallback(
   model: string,
   messages: ChatMessage[],
+  temperature = 0.7,
 ): Promise<{ content: string; modelUsed: string }> {
   try {
-    const content = await rawChat(model, messages);
+    const content = await rawChat(model, messages, temperature);
     return { content, modelUsed: model };
   } catch (err) {
     const status = (err as Error & { status?: number }).status;
     if (status === 429) throw err; // let the caller throttle/retry
     if (model === FREE_ROUTER_ID) throw err; // already on fallback
     // try the free auto-router once
-    const content = await rawChat(FREE_ROUTER_ID, messages);
+    const content = await rawChat(FREE_ROUTER_ID, messages, temperature);
     return { content, modelUsed: FREE_ROUTER_ID };
   }
 }
