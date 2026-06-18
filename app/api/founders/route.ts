@@ -9,11 +9,8 @@ import {
 import { lookupEmail, rocketreachConfigured } from "@/lib/rocketreach";
 import type { FoundersResult } from "@/lib/types";
 
-// Web search + scrape + a model call + RocketReach polling can take a while.
 export const maxDuration = 60;
 
-// Founder/website discovery runs on Claude Haiku (with web search) regardless
-// of the generation model. Override with FOUNDER_MODEL.
 const FOUNDER_MODEL = process.env.FOUNDER_MODEL || "anthropic/claude-haiku-4.5";
 
 type Person = { name: string; role?: string };
@@ -80,11 +77,26 @@ export async function POST(request: Request) {
     );
   }
 
-  // Grounding scrape when we already have a website (best effort).
+  // Stage-by-stage trace, returned to the client and logged server-side.
+  const steps: string[] = [];
+  const trace = (s: string) => {
+    steps.push(s);
+    console.log(`[founders] ${company || inputWebsite}: ${s}`);
+  };
+  trace(`input company="${company}" website="${inputWebsite}"`);
+
+  // Grounding scrape when we already have a website.
   let siteContext = "";
   if (inputWebsite) {
     const scrape = await scrapeForRecipients(inputWebsite);
     siteContext = scrape.text;
+    trace(
+      `scrape(${inputWebsite}): ok=${scrape.ok} chars=${scrape.text.length}${
+        scrape.note ? ` note="${scrape.note}"` : ""
+      }`,
+    );
+  } else {
+    trace("scrape: skipped (no website yet)");
   }
 
   let resolvedWebsite = inputWebsite;
@@ -99,15 +111,23 @@ export async function POST(request: Request) {
     const out = parsePeople(content);
     if (!resolvedWebsite && out.website) resolvedWebsite = out.website;
     people = out.people;
-  } catch {
-    // search unavailable — fall through to scrape-based extraction below
+    const snippet = content.slice(0, 160).replace(/\s+/g, " ");
+    trace(
+      `search(${FOUNDER_MODEL}): ok website=${out.website ?? "-"} people=${
+        out.people.length
+      } raw="${snippet}${content.length > 160 ? "…" : ""}"`,
+    );
+  } catch (e) {
+    const status = (e as Error & { status?: number }).status;
+    const msg = e instanceof Error ? e.message : String(e);
+    trace(`search(${FOUNDER_MODEL}): ERROR${status ? ` ${status}` : ""} ${msg}`);
   }
 
-  // 1b) If we now have a website but never scraped it, grab context for later
-  //     generation reuse and as a fallback source.
+  // 1b) Scrape a discovered website if we didn't already.
   if (!siteContext && resolvedWebsite) {
     const scrape = await scrapeForRecipients(resolvedWebsite);
     siteContext = scrape.text;
+    trace(`scrape(discovered ${resolvedWebsite}): chars=${scrape.text.length}`);
   }
 
   // 2) Fallback: extract from scraped text if search produced no people.
@@ -119,29 +139,42 @@ export async function POST(request: Request) {
         0.2,
       );
       people = parsePeople(content).people;
-    } catch {
-      /* leave empty */
+      trace(`scrape-fallback: people=${people.length}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      trace(`scrape-fallback: ERROR ${msg}`);
     }
+  } else if (people.length === 0) {
+    trace("scrape-fallback: skipped (no site text)");
   }
 
   // 3) Verified emails from RocketReach, preferring the company's own domain.
   const dom = domainOf(resolvedWebsite);
   let recipients = people.map((p) => ({ ...p, email: "" }));
-  if (rocketreachConfigured() && people.length) {
+  if (!rocketreachConfigured()) {
+    trace("rocketreach: NOT configured (set ROCKETREACH_API_KEY)");
+  } else if (people.length) {
     const emails = await Promise.all(
       people.map((p) => lookupEmail(p.name, company, dom)),
     );
     recipients = people.map((p, i) => ({ ...p, email: emails[i] || "" }));
+    trace(
+      `rocketreach(domain=${dom || "-"}): ${recipients
+        .map((r) => `${r.name}=${r.email ? "found" : "none"}`)
+        .join(", ")}`,
+    );
+  } else {
+    trace("rocketreach: skipped (no people)");
   }
 
   const foundEmails = recipients.filter((r) => r.email).length;
   const note =
     people.length === 0
-      ? "Could not identify recipients. Add a website or enter them manually."
+      ? "Could not identify recipients — see diagnostics."
       : !rocketreachConfigured()
         ? "Found names. Add a ROCKETREACH_API_KEY to auto-fill emails."
         : foundEmails === 0
-          ? "Found names, but no verified emails matched. Add emails manually."
+          ? "Found names, but no verified emails matched."
           : undefined;
 
   const result: FoundersResult = {
@@ -150,6 +183,7 @@ export async function POST(request: Request) {
     siteContext,
     weak: people.length === 0,
     note,
+    debug: steps.join("\n"),
   };
   return NextResponse.json(result);
 }

@@ -293,10 +293,17 @@ export function GeneratorGrid({
         website: !row.website.trim() && data.website ? data.website : row.website,
         siteContext: data.siteContext || row.siteContext,
         extractionWeak: data.weak,
+        findNote: data.note,
+        findDebug: data.debug,
       });
     } catch (e) {
       if (e instanceof Error && e.message === "RATE_LIMIT") throw e;
-      patchRow(id, { status: "idle", extractionWeak: true });
+      patchRow(id, {
+        status: "idle",
+        extractionWeak: true,
+        findNote: "Request failed before reaching the server.",
+        findDebug: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 

@@ -125,9 +125,9 @@ export async function chatWithSearch(
       model,
       messages,
       temperature: 0.2,
-      tools: [
-        { type: "openrouter:web_search", parameters: { max_results: maxResults } },
-      ],
+      // Web plugin runs one search and injects results, returning normal
+      // message content (simplest reliable path for our JSON output).
+      plugins: [{ id: "web", max_results: maxResults }],
     }),
   });
   const json = await res.json().catch(() => null);
