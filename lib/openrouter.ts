@@ -107,11 +107,50 @@ export async function listModels() {
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
-async function rawChat(model: string, messages: ChatMessage[]) {
+/**
+ * Chat with OpenRouter's web-search server tool enabled, so the model can find
+ * current info (company websites, founder names) like a research agent.
+ * OpenRouter runs the searches server-side and returns the final answer.
+ * Throws on error so callers can fall back to a non-search path.
+ */
+export async function chatWithSearch(
+  model: string,
+  messages: ChatMessage[],
+  maxResults = 5,
+): Promise<string> {
   const res = await fetch(`${BASE}/chat/completions`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ model, messages, temperature: 0.7 }),
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.2,
+      // Web plugin runs one search and injects results, returning normal
+      // message content (simplest reliable path for our JSON output).
+      plugins: [{ id: "web", max_results: maxResults }],
+    }),
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    const msg =
+      (json && (json.error?.message || json.error)) ||
+      `OpenRouter error ${res.status}`;
+    const err = new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+    (err as Error & { status?: number }).status = res.status;
+    throw err;
+  }
+  return (json?.choices?.[0]?.message?.content ?? "").trim();
+}
+
+async function rawChat(
+  model: string,
+  messages: ChatMessage[],
+  temperature = 0.7,
+) {
+  const res = await fetch(`${BASE}/chat/completions`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ model, messages, temperature }),
   });
 
   const json = await res.json().catch(() => null);
@@ -135,16 +174,17 @@ async function rawChat(model: string, messages: ChatMessage[]) {
 export async function chatWithFallback(
   model: string,
   messages: ChatMessage[],
+  temperature = 0.7,
 ): Promise<{ content: string; modelUsed: string }> {
   try {
-    const content = await rawChat(model, messages);
+    const content = await rawChat(model, messages, temperature);
     return { content, modelUsed: model };
   } catch (err) {
     const status = (err as Error & { status?: number }).status;
     if (status === 429) throw err; // let the caller throttle/retry
     if (model === FREE_ROUTER_ID) throw err; // already on fallback
     // try the free auto-router once
-    const content = await rawChat(FREE_ROUTER_ID, messages);
+    const content = await rawChat(FREE_ROUTER_ID, messages, temperature);
     return { content, modelUsed: FREE_ROUTER_ID };
   }
 }

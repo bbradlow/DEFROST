@@ -110,6 +110,43 @@ export function buildUserPrompt(opts: {
 }
 
 /** Prompt for extracting likely recipients from website text. */
+/**
+ * Research-style discovery: find the company's official website (if unknown)
+ * and its most senior outreach targets, using web search. Strict JSON out.
+ */
+export function buildEnrichmentMessages(
+  company: string,
+  website?: string,
+  siteText?: string,
+) {
+  const system =
+    "You are a research assistant. For a given company, find its official website and " +
+    "the most senior people to address cold outreach to (prefer founder/CEO, else the most " +
+    "senior leader you can verify). Use web search for accurate, current info. " +
+    "Return STRICT JSON only — no prose, no markdown fences.";
+
+  const known = clean(website) ? `Known website: ${clean(website)}\n` : "";
+  const ctx = siteText
+    ? `\n\nWebsite text that may help:\n"""\n${siteText.slice(0, 6000)}\n"""`
+    : "";
+
+  const user = `Company: ${clean(company) || "(unknown)"}
+${known}
+Find:
+1) The company's official website homepage URL (https://...). If a known website is given above, prefer it.
+2) Up to 2 of the most senior people for cold outreach (prefer founder/CEO).
+
+Return JSON in exactly this shape:
+{"website":"https://...","recipients":[{"name":"Full Name","role":"Their role"}]}
+
+Only include real, verifiable people. If you cannot verify someone, include fewer (or an empty array). Do NOT invent names.${ctx}`;
+
+  return [
+    { role: "system" as const, content: system },
+    { role: "user" as const, content: user },
+  ];
+}
+
 export function buildFounderExtractionMessages(
   company: string,
   siteText: string,

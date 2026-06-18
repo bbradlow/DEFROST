@@ -121,3 +121,61 @@ export async function scrapeWebsite(rawUrl: string): Promise<ScrapeResult> {
     return { ok: false, text: "", weak: true, note: `Could not fetch site: ${msg}` };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Richer scrape for recipient discovery: homepage + common "people" pages.
+// ---------------------------------------------------------------------------
+
+const PEOPLE_PATHS = ["/about", "/team", "/leadership", "/company"];
+
+async function fetchText(url: string, timeoutMs: number): Promise<string> {
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (compatible; ColdOutreachGen/1.0; +https://openrouter.ai)",
+        Accept: "text/html,application/xhtml+xml",
+      },
+    }).finally(() => clearTimeout(t));
+    if (!res.ok) return "";
+    const ctype = res.headers.get("content-type") ?? "";
+    if (!ctype.includes("html") && !ctype.includes("text")) return "";
+    return stripHtml(await res.text());
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Fetch the homepage plus a few common leadership pages (about/team/...) and
+ * concatenate the readable text, capped. Gives the model more to work with
+ * when identifying founders/execs. Best effort — missing pages are skipped.
+ */
+export async function scrapeForRecipients(rawUrl: string): Promise<ScrapeResult> {
+  const url = normalizeUrl(rawUrl);
+  if (!url) {
+    return { ok: false, text: "", weak: true, note: "Invalid or blocked URL." };
+  }
+
+  const origin = new URL(url).origin;
+  const targets = [url, ...PEOPLE_PATHS.map((p) => origin + p)];
+
+  const texts = await Promise.all(
+    targets.map((u, i) => fetchText(u, i === 0 ? 12_000 : 5_000)),
+  );
+
+  const text = texts.filter(Boolean).join("\n\n").slice(0, 12_000).trim();
+  const weak = text.length < 400;
+  return {
+    ok: text.length > 0,
+    text,
+    weak,
+    note: weak
+      ? "Extracted very little text (likely a JS-heavy site). Add recipients manually."
+      : undefined,
+  };
+}

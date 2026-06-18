@@ -42,6 +42,9 @@ export type EmailRow = {
   error?: string;
   extractionWeak?: boolean;
   csvIssue?: string;
+  // diagnostics from the last recipient-finding run
+  findNote?: string;
+  findDebug?: string;
   // cached readable text from the website so we don't re-fetch when generating
   siteContext?: string;
 };
@@ -56,10 +59,12 @@ export type ModelOption = {
 
 // Shape returned by /api/founders
 export type FoundersResult = {
-  recipients: { name: string; role?: string }[];
+  recipients: { name: string; role?: string; email?: string }[];
+  website?: string;
   siteContext: string;
   weak: boolean;
   note?: string;
+  debug?: string; // human-readable stage-by-stage trace
 };
 
 export function newRow(partial: Partial<EmailRow> = {}): EmailRow {

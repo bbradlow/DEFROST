@@ -128,16 +128,16 @@ export function EmailRow({
               type="button"
               className="text-[11px] text-accent hover:text-accent-ink disabled:opacity-40"
               onClick={onFindRecipients}
-              disabled={disabled || busy || !row.website.trim()}
+              disabled={disabled || busy || (!row.website.trim() && !row.company.trim())}
             >
-              {row.status === "finding" ? "Finding…" : "↻ Auto-fill from website"}
+              {row.status === "finding" ? "Finding…" : "↻ Auto-fill recipients"}
             </button>
           </div>
 
           {row.recipients.length === 0 && (
             <p className="mb-2 text-xs text-ink-faint">
-              None yet — add manually or auto-fill from the website (names only;
-              fill emails after generating).
+              None yet — add manually, or auto-fill: finds the website (if blank)
+              and founders, then pulls verified emails.
             </p>
           )}
 
@@ -177,10 +177,23 @@ export function EmailRow({
             </button>
           )}
 
-          {row.extractionWeak && (
+          {row.findNote && (
+            <p className="mt-2 text-xs text-flag">{row.findNote}</p>
+          )}
+          {!row.findNote && row.extractionWeak && (
             <p className="mt-2 text-xs text-flag">
               Weak extraction from this site — verify recipients manually.
             </p>
+          )}
+          {row.findDebug && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-[11px] text-ink-faint hover:text-ink">
+                Diagnostics (what the finder did)
+              </summary>
+              <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-line bg-paper p-2 font-mono text-[10px] leading-relaxed text-ink-soft">
+                {row.findDebug}
+              </pre>
+            </details>
           )}
         </div>
 

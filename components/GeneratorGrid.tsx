@@ -61,6 +61,8 @@ export function GeneratorGrid({
   const [bulkWriterId, setBulkWriterId] = useState<string>("");
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
+  const [companyList, setCompanyList] = useState("");
+  const [showList, setShowList] = useState(false);
 
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -223,16 +225,57 @@ export function GeneratorGrid({
     setRows((rs) => rs.map((r) => ({ ...r, writerId: bulkWriterId, csvIssue: undefined })));
   }
 
+  // ---- Company list -> rows / CSV ------------------------------------------
+  // Each line is "Company" or "Company, website" (comma or tab separated).
+  function parseCompanyLines(text: string): { company: string; website: string }[] {
+    return text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const parts = line.split(/[\t,]/).map((p) => p.trim());
+        return { company: parts[0] ?? "", website: parts[1] ?? "" };
+      })
+      .filter((x) => x.company);
+  }
+
+  function addFromList() {
+    const parsed = parseCompanyLines(companyList);
+    if (!parsed.length) {
+      setBanner("Enter at least one company name (one per line).");
+      return;
+    }
+    const created = parsed.map((p) =>
+      newRow({
+        company: p.company,
+        website: p.website,
+        writerId: bulkWriterId || null,
+      }),
+    );
+    setRows((rs) => {
+      const onlyBlank =
+        rs.length === 1 &&
+        !rs[0].company &&
+        !rs[0].website &&
+        !rs[0].additionalInfo &&
+        !rs[0].body;
+      return onlyBlank ? created : [...rs, ...created];
+    });
+    setCompanyList("");
+    setShowList(false);
+    setBanner(`Added ${created.length} row${created.length === 1 ? "" : "s"} from your list.`);
+  }
+
   // ---- Recipient extraction ------------------------------------------------
   async function findRecipients(id: string): Promise<void> {
     const row = rowsRef.current.find((r) => r.id === id);
-    if (!row || !row.website.trim()) return;
+    if (!row || (!row.website.trim() && !row.company.trim())) return;
     patchRow(id, { status: "finding", error: undefined });
     try {
       const res = await fetch("/api/founders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ website: row.website, company: row.company, model }),
+        body: JSON.stringify({ website: row.website, company: row.company }),
       });
       const data: FoundersResult & { error?: string } = await res.json();
       if (res.status === 429) {
@@ -240,16 +283,27 @@ export function GeneratorGrid({
         throw new Error("RATE_LIMIT");
       }
       const recipients =
-        data.recipients?.slice(0, 2).map((r) => ({ name: r.name, email: "" })) ?? [];
+        data.recipients
+          ?.slice(0, 2)
+          .map((r) => ({ name: r.name, email: r.email ?? "" })) ?? [];
       patchRow(id, {
         status: "idle",
         recipients: recipients.length ? recipients : row.recipients,
+        // backfill a discovered website if the row didn't have one
+        website: !row.website.trim() && data.website ? data.website : row.website,
         siteContext: data.siteContext || row.siteContext,
         extractionWeak: data.weak,
+        findNote: data.note,
+        findDebug: data.debug,
       });
     } catch (e) {
       if (e instanceof Error && e.message === "RATE_LIMIT") throw e;
-      patchRow(id, { status: "idle", extractionWeak: true });
+      patchRow(id, {
+        status: "idle",
+        extractionWeak: true,
+        findNote: "Request failed before reaching the server.",
+        findDebug: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 
@@ -339,9 +393,11 @@ export function GeneratorGrid({
   }
 
   async function findAllRecipients() {
-    const targets = rows.filter((r) => r.website.trim() && r.recipients.length === 0);
+    const targets = rows.filter(
+      (r) => (r.company.trim() || r.website.trim()) && r.recipients.length === 0,
+    );
     if (targets.length === 0) {
-      setBanner("No rows need recipients (all blank-recipient rows are missing a website).");
+      setBanner("No rows need recipients (add a company name or website first).");
       return;
     }
     await runThrottled(targets.map((r) => r.id), findRecipients);
@@ -545,6 +601,13 @@ export function GeneratorGrid({
         >
           Import CSV
         </button>
+        <button
+          className="btn btn-ghost"
+          onClick={() => setShowList((s) => !s)}
+          disabled={busy}
+        >
+          {showList ? "Hide company list" : "Paste company list"}
+        </button>
         <input
           ref={fileRef}
           type="file"
@@ -571,6 +634,33 @@ export function GeneratorGrid({
           {busy ? "Working…" : "Generate all"}
         </button>
       </div>
+
+      {/* Company list -> rows */}
+      {showList && (
+        <div className="mb-4 rounded-lg border border-line bg-panel p-4">
+          <label className="field-label mb-1 block">
+            Paste a company list (one per line)
+          </label>
+          <p className="mb-2 text-xs text-ink-faint">
+            Just company names, or <span className="font-mono">Company, website</span>{" "}
+            per line. Each becomes a row. Then click{" "}
+            <span className="font-medium">Auto-fill recipients (all)</span> — it
+            finds the website (if missing) and the founders, and pulls their
+            verified emails. Set one writer for all, then Generate.
+          </p>
+          <textarea
+            className="inp h-36 resize-y font-mono text-xs"
+            value={companyList}
+            onChange={(e) => setCompanyList(e.target.value)}
+            placeholder={"Northflank\nMetronome\nAirwallex, airwallex.com"}
+          />
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button className="btn btn-primary" onClick={addFromList}>
+              Add as rows
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Progress / banner */}
       {progress && (
