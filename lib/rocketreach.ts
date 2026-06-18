@@ -34,10 +34,24 @@ function gradeRank(g?: string): number {
   return g ? (order[g.toUpperCase()] ?? 0) : 0;
 }
 
-/** Prefer a professional email, then the best validation grade. */
-function pickBestEmail(emails?: RREmail[]): string {
+function emailDomain(e: string): string {
+  const at = e.lastIndexOf("@");
+  return at >= 0 ? e.slice(at + 1).toLowerCase() : "";
+}
+
+/**
+ * Prefer an email that matches the company's own domain (a strong verification
+ * signal), then a professional email, then the best validation grade.
+ */
+function pickBestEmail(emails?: RREmail[], preferDomain?: string): string {
   if (!emails?.length) return "";
+  const dom = (preferDomain ?? "").replace(/^www\./, "").toLowerCase();
   const sorted = [...emails].sort((a, b) => {
+    if (dom) {
+      const am = emailDomain(a.email).endsWith(dom) ? 1 : 0;
+      const bm = emailDomain(b.email).endsWith(dom) ? 1 : 0;
+      if (am !== bm) return bm - am;
+    }
     const ap = a.type === "professional" ? 1 : 0;
     const bp = b.type === "professional" ? 1 : 0;
     if (ap !== bp) return bp - ap;
@@ -63,7 +77,11 @@ async function lookup(params: Record<string, string>): Promise<RRProfile | null>
  * Resolve a single person's best email. Returns "" if nothing is found or
  * RocketReach isn't configured. Never throws.
  */
-export async function lookupEmail(name: string, company: string): Promise<string> {
+export async function lookupEmail(
+  name: string,
+  company: string,
+  preferDomain?: string,
+): Promise<string> {
   if (!rocketreachConfigured()) return "";
   const n = name.trim();
   if (!n) return "";
@@ -74,7 +92,7 @@ export async function lookupEmail(name: string, company: string): Promise<string
     );
     if (!profile) return "";
 
-    let email = pickBestEmail(profile.emails);
+    let email = pickBestEmail(profile.emails, preferDomain);
 
     // Poll by id while the contact search is still running.
     let attempts = 0;
@@ -85,7 +103,7 @@ export async function lookupEmail(name: string, company: string): Promise<string
       await sleep(1200);
       profile = await lookup({ id: String(profile.id) });
       if (!profile) break;
-      email = pickBestEmail(profile.emails);
+      email = pickBestEmail(profile.emails, preferDomain);
     }
     return email;
   } catch {

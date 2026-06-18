@@ -107,6 +107,41 @@ export async function listModels() {
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
+/**
+ * Chat with OpenRouter's web-search server tool enabled, so the model can find
+ * current info (company websites, founder names) like a research agent.
+ * OpenRouter runs the searches server-side and returns the final answer.
+ * Throws on error so callers can fall back to a non-search path.
+ */
+export async function chatWithSearch(
+  model: string,
+  messages: ChatMessage[],
+  maxResults = 5,
+): Promise<string> {
+  const res = await fetch(`${BASE}/chat/completions`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.2,
+      tools: [
+        { type: "openrouter:web_search", parameters: { max_results: maxResults } },
+      ],
+    }),
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    const msg =
+      (json && (json.error?.message || json.error)) ||
+      `OpenRouter error ${res.status}`;
+    const err = new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+    (err as Error & { status?: number }).status = res.status;
+    throw err;
+  }
+  return (json?.choices?.[0]?.message?.content ?? "").trim();
+}
+
 async function rawChat(
   model: string,
   messages: ChatMessage[],

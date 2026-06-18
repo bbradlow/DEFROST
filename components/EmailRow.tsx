@@ -128,16 +128,16 @@ export function EmailRow({
               type="button"
               className="text-[11px] text-accent hover:text-accent-ink disabled:opacity-40"
               onClick={onFindRecipients}
-              disabled={disabled || busy || !row.website.trim()}
+              disabled={disabled || busy || (!row.website.trim() && !row.company.trim())}
             >
-              {row.status === "finding" ? "Finding…" : "↻ Auto-fill from website"}
+              {row.status === "finding" ? "Finding…" : "↻ Auto-fill recipients"}
             </button>
           </div>
 
           {row.recipients.length === 0 && (
             <p className="mb-2 text-xs text-ink-faint">
-              None yet — add manually or auto-fill from the website (names only;
-              fill emails after generating).
+              None yet — add manually, or auto-fill: finds the website (if blank)
+              and founders, then pulls verified emails.
             </p>
           )}
 

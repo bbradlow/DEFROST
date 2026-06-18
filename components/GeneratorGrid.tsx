@@ -266,38 +266,16 @@ export function GeneratorGrid({
     setBanner(`Added ${created.length} row${created.length === 1 ? "" : "s"} from your list.`);
   }
 
-  function listToCsv(): string {
-    const parsed = parseCompanyLines(companyList);
-    const esc = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
-    const header = "company,website,recipients,additional_info";
-    const lines = parsed.map((p) => [esc(p.company), esc(p.website), "", ""].join(","));
-    return [header, ...lines].join("\n");
-  }
-
-  async function copyListCsv() {
-    const parsed = parseCompanyLines(companyList);
-    if (!parsed.length) {
-      setBanner("Enter at least one company name first.");
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(listToCsv());
-      setBanner("CSV copied to clipboard.");
-    } catch {
-      setBanner("Couldn't copy — your browser blocked clipboard access.");
-    }
-  }
-
   // ---- Recipient extraction ------------------------------------------------
   async function findRecipients(id: string): Promise<void> {
     const row = rowsRef.current.find((r) => r.id === id);
-    if (!row || !row.website.trim()) return;
+    if (!row || (!row.website.trim() && !row.company.trim())) return;
     patchRow(id, { status: "finding", error: undefined });
     try {
       const res = await fetch("/api/founders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ website: row.website, company: row.company, model }),
+        body: JSON.stringify({ website: row.website, company: row.company }),
       });
       const data: FoundersResult & { error?: string } = await res.json();
       if (res.status === 429) {
@@ -311,6 +289,8 @@ export function GeneratorGrid({
       patchRow(id, {
         status: "idle",
         recipients: recipients.length ? recipients : row.recipients,
+        // backfill a discovered website if the row didn't have one
+        website: !row.website.trim() && data.website ? data.website : row.website,
         siteContext: data.siteContext || row.siteContext,
         extractionWeak: data.weak,
       });
@@ -406,9 +386,11 @@ export function GeneratorGrid({
   }
 
   async function findAllRecipients() {
-    const targets = rows.filter((r) => r.website.trim() && r.recipients.length === 0);
+    const targets = rows.filter(
+      (r) => (r.company.trim() || r.website.trim()) && r.recipients.length === 0,
+    );
     if (targets.length === 0) {
-      setBanner("No rows need recipients (all blank-recipient rows are missing a website).");
+      setBanner("No rows need recipients (add a company name or website first).");
       return;
     }
     await runThrottled(targets.map((r) => r.id), findRecipients);
@@ -654,22 +636,20 @@ export function GeneratorGrid({
           </label>
           <p className="mb-2 text-xs text-ink-faint">
             Just company names, or <span className="font-mono">Company, website</span>{" "}
-            per line. Each becomes a row (company, website, recipients, additional
-            info) — no writer needed. Use &ldquo;Set one writer for all&rdquo; after,
-            then Auto-fill recipients.
+            per line. Each becomes a row. Then click{" "}
+            <span className="font-medium">Auto-fill recipients (all)</span> — it
+            finds the website (if missing) and the founders, and pulls their
+            verified emails. Set one writer for all, then Generate.
           </p>
           <textarea
             className="inp h-36 resize-y font-mono text-xs"
             value={companyList}
             onChange={(e) => setCompanyList(e.target.value)}
-            placeholder={"Northflank, northflank.com\nMetronome\nAirwallex, airwallex.com"}
+            placeholder={"Northflank\nMetronome\nAirwallex, airwallex.com"}
           />
           <div className="mt-2 flex flex-wrap gap-2">
             <button className="btn btn-primary" onClick={addFromList}>
               Add as rows
-            </button>
-            <button className="btn btn-ghost" onClick={copyListCsv}>
-              Copy as CSV
             </button>
           </div>
         </div>
