@@ -3,7 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import {
   affinityConfigured,
   whoami,
-  findInternalPersonByEmail,
+  whoamiEmail,
+  searchPersons,
   getPersonInteractions,
   type AffinityInteraction,
   type AffinityPerson,
@@ -20,9 +21,7 @@ export async function POST(request: Request) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-  }
+  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   if (!affinityConfigured()) {
     return NextResponse.json(
       { error: "Affinity is not configured. Set AFFINITY_API_KEY." },
@@ -45,37 +44,60 @@ export async function POST(request: Request) {
     console.log(`[affinity] ${ownerEmail}: ${s}`);
   };
 
-  // 1) Verify key + identify tenant.
+  // 1) whoami — verify key and identify the key's owner (that's the user).
   const who = await whoami();
-  if (!who.ok) {
-    trace(`whoami: FAILED status=${who.status}`);
+  if (!who.ok || !who.data?.user) {
+    trace(`whoami: FAILED status=${who.status} raw=${who.raw}`);
     return NextResponse.json(
       { error: "Affinity rejected the API key.", debug: steps.join("\n") },
       { status: 400 },
     );
   }
-  trace(`whoami: ok tenant="${who.data?.tenant?.name ?? "?"}"`);
+  const meUser = who.data.user;
+  const meId = typeof meUser.id === "number" ? meUser.id : null;
+  const meEmailFromAffinity = whoamiEmail(who.data);
+  trace(
+    `whoami: ok tenant="${who.data.tenant?.name ?? "?"}" user#${meId ?? "?"} ` +
+      `name="${`${meUser.firstName ?? ""} ${meUser.lastName ?? ""}`.trim()}" ` +
+      `email="${meEmailFromAffinity || "(no email field)"}" keys=[${Object.keys(meUser).join(",")}]`,
+  );
+  if (meEmailFromAffinity && meEmailFromAffinity.toLowerCase() !== ownerEmail.toLowerCase()) {
+    trace(
+      `note: Affinity key belongs to ${meEmailFromAffinity}, but you're logged into DEFROST as ${ownerEmail}`,
+    );
+  }
 
-  // 2) Match the signed-in DEFROST email to an Affinity internal person.
-  const found = await findInternalPersonByEmail(ownerEmail);
-  if (!found.match) {
-    trace(`match: no Affinity person found for ${ownerEmail} (searched ${found.persons.length})`);
+  // 2) For diagnostics, show what the person search returns for your email.
+  const search = await searchPersons(ownerEmail);
+  trace(
+    `persons?term=${ownerEmail}: status=${search.status} count=${search.persons.length} raw=${search.raw}`,
+  );
+
+  // Pick the person id to read interactions for: prefer a search match,
+  // otherwise fall back to the whoami user id.
+  const lower = ownerEmail.toLowerCase();
+  const searchMatch =
+    search.persons.find(
+      (p) =>
+        (p.primary_email ?? "").toLowerCase() === lower ||
+        p.emails?.some((e) => e.toLowerCase() === lower),
+    ) ?? null;
+  const personId = searchMatch?.id ?? meId;
+  trace(
+    `identity: using ${searchMatch ? `person #${searchMatch.id} (search match)` : `whoami user #${meId} (fallback)`}`,
+  );
+  if (!personId) {
     return NextResponse.json(
-      {
-        error: `Couldn't match ${ownerEmail} to an Affinity account.`,
-        debug: steps.join("\n"),
-      },
+      { error: "Could not resolve your Affinity person id.", debug: steps.join("\n") },
       { status: 404 },
     );
   }
-  const me = found.match;
-  trace(`match: ${ownerEmail} -> person #${me.id} (${me.first_name} ${me.last_name})`);
 
-  // 3) Pull recent interactions for this person and keep the email ones.
+  // 3) Read recent interactions for that person.
   const since = daysAgoISO(sinceDays);
-  const inter = await getPersonInteractions(me.id, since);
+  const inter = await getPersonInteractions(personId, since);
   if (!inter.ok) {
-    trace(`interactions: status=${inter.status} (endpoint may need tuning for your tenant)`);
+    trace(`interactions: status=${inter.status} raw=${inter.raw}`);
     return NextResponse.json(
       {
         error: "Could not read interactions from Affinity (see diagnostics).",
@@ -86,21 +108,19 @@ export async function POST(request: Request) {
   }
   const raw: AffinityInteraction[] =
     inter.data?.emails ?? inter.data?.interactions ?? [];
-  trace(`interactions: received ${raw.length} record(s)`);
+  trace(
+    `interactions: status=${inter.status} records=${raw.length} raw=${inter.raw}`,
+  );
 
-  // Build one prospective thread per external contact (most recent email wins).
-  const meEmails = new Set([
-    ownerEmail.toLowerCase(),
-    ...(me.emails ?? []).map((e) => e.toLowerCase()),
-  ]);
-  const byEmail = new Map<
-    string,
-    { name: string; email: string; at: string }
-  >();
+  // 4) Build one prospective thread per external contact (latest email wins).
+  const myEmails = new Set(
+    [ownerEmail.toLowerCase(), meEmailFromAffinity.toLowerCase()].filter(Boolean),
+  );
+  const byEmail = new Map<string, { name: string; email: string; at: string }>();
   for (const it of raw) {
     const when = it.date ?? it.start_time ?? "";
     const externals: AffinityPerson[] = (it.persons ?? []).filter(
-      (p) => !meEmails.has((p.primary_email ?? "").toLowerCase()),
+      (p) => !myEmails.has((p.primary_email ?? "").toLowerCase()),
     );
     for (const p of externals) {
       const email = (p.primary_email ?? p.emails?.[0] ?? "").toLowerCase();
@@ -111,9 +131,9 @@ export async function POST(request: Request) {
     }
   }
   const candidates = [...byEmail.values()];
-  trace(`contacts: ${candidates.length} external contact(s) from emails`);
+  trace(`contacts: ${candidates.length} external contact(s)`);
 
-  // 4) Upsert into email_threads (no duplicate per owner+contact_email).
+  // 5) Upsert into email_threads (dedupe per owner+contact_email).
   const { data: existing } = await supabase
     .from("email_threads")
     .select("id, contact_email, last_outbound_at");
