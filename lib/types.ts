@@ -17,6 +17,25 @@ export type StylePrompt = {
   created_at: string;
 };
 
+export type ThreadStatus = "no_answer" | "answered" | "meeting_set";
+
+export type EmailThread = {
+  id: string;
+  owner_id: string;
+  contact_name: string;
+  contact_email: string;
+  company: string | null;
+  subject: string | null;
+  last_outbound_at: string; // ISO
+  last_inbound_at: string | null;
+  meeting_at: string | null;
+  status: ThreadStatus;
+  snippet: string | null; // context for drafting the follow-up
+  source: string; // 'manual' | 'outlook' | 'affinity'
+  thread_url: string | null;
+  created_at: string;
+};
+
 export type Recipient = {
   name: string;
   email: string; // filled in after generation; may be blank

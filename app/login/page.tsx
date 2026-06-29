@@ -68,10 +68,10 @@ function LoginForm() {
             className="mb-5 h-6 w-auto"
           />
           <h1 className="text-2xl font-semibold tracking-tight text-ink">
-            DEFROST
+            Cold Outreach Generator
           </h1>
           <p className="mt-1 text-sm text-ink-faint">
-            Delivering Emails to Founders Really Often, Somewhat Targetedly.
+            Sign in to generate and hand off emails.
           </p>
         </div>
 
@@ -141,7 +141,7 @@ function LoginForm() {
 
         <p className="mt-4 text-center text-xs text-ink-faint">
           The signed-in user is the <strong>owner</strong>. Writers (senders)
-          are managed inside the app. Made by <strong>Ben Bradlow</strong> 06102026.
+          are managed inside the app.
         </p>
       </div>
     </main>
