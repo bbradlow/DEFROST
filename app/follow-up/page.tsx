@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { TopBar } from "@/components/TopBar";
 import { FollowUpDashboard } from "@/components/FollowUpDashboard";
+import { affinityConfigured } from "@/lib/integrations/affinity";
+import { calendlyConfigured, isConnected } from "@/lib/integrations/calendly";
 import type { EmailThread, Writer } from "@/lib/types";
 
 export default async function FollowUpPage() {
@@ -19,6 +21,8 @@ export default async function FollowUpPage() {
     supabase.from("writers").select("*").order("created_at", { ascending: true }),
   ]);
 
+  const calendlyConnected = calendlyConfigured() ? await isConnected(user.id) : false;
+
   return (
     <>
       <TopBar ownerEmail={user.email ?? ""} active="followup" />
@@ -26,6 +30,9 @@ export default async function FollowUpPage() {
         <FollowUpDashboard
           initialThreads={(threads ?? []) as EmailThread[]}
           writers={(writers ?? []) as Writer[]}
+          affinityReady={affinityConfigured()}
+          calendlyReady={calendlyConfigured()}
+          calendlyConnected={calendlyConnected}
         />
       </main>
     </>

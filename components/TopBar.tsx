@@ -18,7 +18,7 @@ export function TopBar({
     <header className="sticky top-0 z-20 border-b border-white/10 bg-brand-dark">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-3">
         <div className="flex items-center gap-5">
-          <Link href="/" className="flex items-center gap-3" aria-label="Activant — Outreach home">
+          <Link href="/" className="flex items-center gap-3" aria-label="Activant — DEFROST home">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/activant-logo-white.png"
@@ -29,7 +29,7 @@ export function TopBar({
             />
             <span className="h-4 w-px bg-white/20" aria-hidden />
             <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-white/70">
-              Outreach
+              DEFROST
             </span>
           </Link>
           <nav className="flex items-center gap-1 text-sm">

@@ -76,9 +76,15 @@ const emptyAdd = {
 export function FollowUpDashboard({
   initialThreads,
   writers,
+  affinityReady,
+  calendlyReady,
+  calendlyConnected,
 }: {
   initialThreads: EmailThread[];
   writers: Writer[];
+  affinityReady: boolean;
+  calendlyReady: boolean;
+  calendlyConnected: boolean;
 }) {
   const supabase = createClient();
   const [threads, setThreads] = useState<EmailThread[]>(initialThreads);
@@ -100,6 +106,67 @@ export function FollowUpDashboard({
       if (dm) setModel(dm);
     } catch {}
   }, []);
+
+  const [syncing, setSyncing] = useState<null | "affinity" | "calendly">(null);
+  const [syncDebug, setSyncDebug] = useState<string | null>(null);
+
+  // Surface the result of the Calendly OAuth redirect (?calendly=connected|error).
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get("calendly");
+    if (!p) return;
+    if (p === "connected") setBanner("Calendly connected.");
+    else if (p === "notconfigured") setBanner("Calendly isn't configured on the server yet.");
+    else if (p === "error") setBanner("Calendly connection failed — try again.");
+    window.history.replaceState({}, "", "/follow-up");
+  }, []);
+
+  async function refreshThreads() {
+    const { data } = await supabase
+      .from("email_threads")
+      .select("*")
+      .order("last_outbound_at", { ascending: true });
+    if (data) setThreads(data as EmailThread[]);
+  }
+
+  async function syncAffinity() {
+    setSyncing("affinity");
+    setBanner(null);
+    setSyncDebug(null);
+    try {
+      const res = await fetch("/api/affinity/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sinceDays: 30 }),
+      });
+      const data = await res.json();
+      if (data.debug) setSyncDebug(data.debug);
+      if (!res.ok) throw new Error(data.error ?? "Affinity sync failed");
+      await refreshThreads();
+      setBanner(`Affinity: added ${data.added ?? 0}, updated ${data.updated ?? 0}.`);
+    } catch (e) {
+      setBanner(e instanceof Error ? e.message : "Affinity sync failed");
+    } finally {
+      setSyncing(null);
+    }
+  }
+
+  async function syncCalendly() {
+    setSyncing("calendly");
+    setBanner(null);
+    setSyncDebug(null);
+    try {
+      const res = await fetch("/api/calendly/sync", { method: "POST" });
+      const data = await res.json();
+      if (data.debug) setSyncDebug(data.debug);
+      if (!res.ok) throw new Error(data.error ?? "Calendly sync failed");
+      await refreshThreads();
+      setBanner(`Calendly: ${data.matched ?? 0} meeting(s) matched across ${data.events ?? 0} event(s).`);
+    } catch (e) {
+      setBanner(e instanceof Error ? e.message : "Calendly sync failed");
+    } finally {
+      setSyncing(null);
+    }
+  }
 
   const counts = useMemo(() => {
     const c = { all: threads.length, no_answer: 0, answered: 0, meeting_set: 0 };
@@ -248,21 +315,51 @@ export function FollowUpDashboard({
         </div>
       </div>
 
-      {/* Integrations status */}
-      <div className="mb-5 flex flex-wrap gap-2 text-xs">
-        {["Outlook", "Affinity", "Calendly"].map((name) => (
-          <span
-            key={name}
-            className="inline-flex items-center gap-1.5 rounded border border-line bg-panel px-2.5 py-1 text-ink-faint"
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-ink-faint/50" aria-hidden />
-            {name}: not connected
+      {/* Integrations */}
+      <div className="mb-5 flex flex-wrap items-center gap-2 text-xs">
+        <button
+          className="btn btn-ghost py-1 text-xs"
+          disabled={!affinityReady || syncing !== null}
+          onClick={syncAffinity}
+          title={affinityReady ? "Pull your recent logged emails from Affinity" : "Set AFFINITY_API_KEY on the server"}
+        >
+          {syncing === "affinity" ? "Syncing Affinity…" : "Sync from Affinity"}
+        </button>
+
+        {!calendlyReady ? (
+          <span className="inline-flex items-center gap-1.5 rounded border border-line bg-panel px-2.5 py-1 text-ink-faint">
+            Calendly: not configured
           </span>
-        ))}
-        <span className="self-center text-ink-faint">
-          Connectors populate this list automatically once wired up. For now, add threads manually.
-        </span>
+        ) : calendlyConnected ? (
+          <button
+            className="btn btn-ghost py-1 text-xs"
+            disabled={syncing !== null}
+            onClick={syncCalendly}
+            title="Match scheduled meetings to your threads"
+          >
+            {syncing === "calendly" ? "Syncing Calendly…" : "Sync meetings (Calendly)"}
+          </button>
+        ) : (
+          <a className="btn btn-ghost py-1 text-xs" href="/api/calendly/connect">
+            Connect Calendly
+          </a>
+        )}
+
+        {!affinityReady && (
+          <span className="text-ink-faint">Affinity: set AFFINITY_API_KEY to enable.</span>
+        )}
       </div>
+
+      {syncDebug && (
+        <details className="mb-4">
+          <summary className="cursor-pointer text-[11px] text-ink-faint hover:text-ink">
+            Last sync diagnostics
+          </summary>
+          <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded border border-line bg-paper p-2 font-mono text-[10px] leading-relaxed text-ink-soft">
+            {syncDebug}
+          </pre>
+        </details>
+      )}
 
       {/* Add form */}
       {showAdd && (

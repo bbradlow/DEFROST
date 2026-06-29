@@ -68,7 +68,7 @@ function LoginForm() {
             className="mb-5 h-6 w-auto"
           />
           <h1 className="text-2xl font-semibold tracking-tight text-ink">
-            Cold Outreach Generator
+            DEFROST
           </h1>
           <p className="mt-1 text-sm text-ink-faint">
             Sign in to generate and hand off emails.

@@ -16,7 +16,7 @@ const mono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Activant · Cold Outreach",
+  title: "Activant · DEFROST",
   description: "Generate personalized cold outreach emails in a writer's voice.",
 };
 
