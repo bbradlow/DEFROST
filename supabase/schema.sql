@@ -87,6 +87,50 @@ create policy "style_prompts_delete_own"
   on public.style_prompts for delete
   using (auth.uid() = owner_id);
 
+-- EMAIL THREADS ---------------------------------------------------------------
+-- Backs the Follow-Up tab. Rows added manually now; Outlook/Affinity connectors
+-- write into the same table later (source column). Per-owner via RLS.
+
+create table if not exists public.email_threads (
+  id                uuid primary key default gen_random_uuid(),
+  owner_id          uuid not null references auth.users (id) on delete cascade,
+  contact_name      text not null,
+  contact_email     text not null,
+  company           text,
+  subject           text,
+  last_outbound_at  timestamptz not null default now(),
+  last_inbound_at   timestamptz,
+  meeting_at        timestamptz,
+  status            text not null default 'no_answer'
+                      check (status in ('no_answer', 'answered', 'meeting_set')),
+  snippet           text,
+  source            text not null default 'manual',
+  thread_url        text,
+  created_at        timestamptz not null default now()
+);
+
+create index if not exists email_threads_owner_id_idx
+  on public.email_threads (owner_id);
+
+alter table public.email_threads enable row level security;
+
+drop policy if exists "email_threads_select_own" on public.email_threads;
+create policy "email_threads_select_own"
+  on public.email_threads for select using (auth.uid() = owner_id);
+
+drop policy if exists "email_threads_insert_own" on public.email_threads;
+create policy "email_threads_insert_own"
+  on public.email_threads for insert with check (auth.uid() = owner_id);
+
+drop policy if exists "email_threads_update_own" on public.email_threads;
+create policy "email_threads_update_own"
+  on public.email_threads for update
+  using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+
+drop policy if exists "email_threads_delete_own" on public.email_threads;
+create policy "email_threads_delete_own"
+  on public.email_threads for delete using (auth.uid() = owner_id);
+
 -- ============================================================================
 -- OPTIONAL: saved batch history (DISABLED BY DEFAULT)
 -- The app keeps generated emails in session state only. If you want persisted
