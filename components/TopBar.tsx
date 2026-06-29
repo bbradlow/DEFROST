@@ -29,7 +29,7 @@ export function TopBar({
             />
             <span className="h-4 w-px bg-white/20" aria-hidden />
             <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-white/70">
-              DEFROST
+              DEFROSTY
             </span>
           </Link>
           <nav className="flex items-center gap-1 text-sm">
