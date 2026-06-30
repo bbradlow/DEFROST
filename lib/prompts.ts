@@ -158,8 +158,9 @@ export function buildFollowupMessages(args: {
   subject?: string | null;
   daysSince: number;
   snippet?: string | null;
+  extraInstructions?: string | null;
 }) {
-  const { writer, contactName, company, subject, daysSince, snippet } = args;
+  const { writer, contactName, company, subject, daysSince, snippet, extraInstructions } = args;
 
   const lines = [
     "You are writing a brief, polite follow-up email to a prospect who has not replied to an earlier outreach email.",
@@ -182,6 +183,10 @@ export function buildFollowupMessages(args: {
   if (clean(writer.calendly)) {
     const url = ensureScheme(clean(writer.calendly));
     lines.push(`- Offer to book time, written as a clickable link: my Calendly (${url}). Use this URL verbatim.`);
+  }
+
+  if (clean(extraInstructions)) {
+    lines.push("", "Additional style guidance for this follow-up:", clean(extraInstructions));
   }
 
   const ctx = [

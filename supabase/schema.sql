@@ -58,6 +58,7 @@ create table if not exists public.style_prompts (
   owner_id    uuid not null references auth.users (id) on delete cascade,
   name        text not null,
   body        text not null,
+  kind text not null default 'outreach' check (kind in ('outreach','followup')),
   created_at  timestamptz not null default now()
 );
 

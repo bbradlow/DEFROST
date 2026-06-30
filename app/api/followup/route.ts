@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  let body: { threadId?: string; writerId?: string; model?: string };
+  let body: { threadId?: string; writerId?: string; model?: string; promptId?: string };
   try {
     body = await request.json();
   } catch {
@@ -48,6 +48,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Writer not found." }, { status: 400 });
   }
 
+  let extraInstructions: string | null = null;
+  if (body.promptId) {
+    const { data: prompt } = await supabase
+      .from("style_prompts")
+      .select("body")
+      .eq("id", body.promptId)
+      .single();
+    extraInstructions = prompt?.body ?? null;
+  }
+
   const model = (body.model ?? "openrouter/free").trim();
   const messages = buildFollowupMessages({
     writer,
@@ -56,6 +66,7 @@ export async function POST(request: Request) {
     subject: thread.subject,
     daysSince: daysSince(thread.last_outbound_at),
     snippet: thread.snippet,
+    extraInstructions,
   });
 
   try {

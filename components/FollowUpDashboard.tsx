@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { linkifyToHtml, linkifyToPlain } from "@/lib/linkify";
-import type { EmailThread, ThreadStatus, Writer } from "@/lib/types";
+import type { EmailThread, StylePrompt, ThreadStatus, Writer } from "@/lib/types";
 
 type Segment = "all" | ThreadStatus;
 
@@ -16,6 +16,13 @@ const STATUS_META: Record<ThreadStatus, { label: string; dot: string; text: stri
 function daysSince(iso: string): number {
   const ms = Date.now() - Date.parse(iso);
   return Number.isFinite(ms) ? Math.max(0, Math.floor(ms / 86_400_000)) : 0;
+}
+
+/** Green (just reached out) -> red (long overdue). Caps at ~21 days. */
+function daysColor(days: number): string {
+  const t = Math.min(days, 21) / 21; // 0..1
+  const hue = 140 - t * 140; // 140=green -> 0=red
+  return `hsl(${Math.round(hue)}, 75%, 42%)`;
 }
 
 function todayInput(): string {
@@ -76,12 +83,14 @@ const emptyAdd = {
 export function FollowUpDashboard({
   initialThreads,
   writers,
+  followupPrompts,
   affinityReady,
   calendlyReady,
   calendlyConnected,
 }: {
   initialThreads: EmailThread[];
   writers: Writer[];
+  followupPrompts: StylePrompt[];
   affinityReady: boolean;
   calendlyReady: boolean;
   calendlyConnected: boolean;
@@ -89,8 +98,9 @@ export function FollowUpDashboard({
   const supabase = createClient();
   const [threads, setThreads] = useState<EmailThread[]>(initialThreads);
   const [segment, setSegment] = useState<Segment>("no_answer");
-  const [staleDays, setStaleDays] = useState(5);
+  const [staleDays, setStaleDays] = useState(0);
   const [writerId, setWriterId] = useState<string>(writers[0]?.id ?? "");
+  const [promptId, setPromptId] = useState<string>("");
   const [model, setModel] = useState("openrouter/free");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [draftingId, setDraftingId] = useState<string | null>(null);
@@ -104,8 +114,22 @@ export function FollowUpDashboard({
     try {
       const dm = localStorage.getItem("co:defaultModel");
       if (dm) setModel(dm);
+      const seg = localStorage.getItem("co:followupSegment") as Segment | null;
+      if (seg) setSegment(seg);
+      const sd = localStorage.getItem("co:followupStaleDays");
+      if (sd !== null && sd !== "") setStaleDays(Math.max(0, Number(sd) || 0));
+      const pid = localStorage.getItem("co:followupPromptId");
+      if (pid) setPromptId(pid);
     } catch {}
   }, []);
+
+  // persist filter choices so they survive navigating between tabs
+  useEffect(() => {
+    try {
+      localStorage.setItem("co:followupSegment", segment);
+      localStorage.setItem("co:followupStaleDays", String(staleDays));
+    } catch {}
+  }, [segment, staleDays]);
 
   const [syncing, setSyncing] = useState<null | "affinity" | "calendly">(null);
   const [syncDebug, setSyncDebug] = useState<string | null>(null);
@@ -237,7 +261,7 @@ export function FollowUpDashboard({
       const res = await fetch("/api/followup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threadId: id, writerId, model }),
+        body: JSON.stringify({ threadId: id, writerId, model, promptId: promptId || undefined }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Drafting failed");
@@ -324,6 +348,26 @@ export function FollowUpDashboard({
               ))}
             </select>
           </div>
+          {followupPrompts.length > 0 && (
+            <div>
+              <label className="field-label mb-1 block">Style</label>
+              <select
+                className="inp"
+                value={promptId}
+                onChange={(e) => {
+                  setPromptId(e.target.value);
+                  try { localStorage.setItem("co:followupPromptId", e.target.value); } catch {}
+                }}
+              >
+                <option value="">Default</option>
+                {followupPrompts.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <button className="btn btn-ghost" onClick={() => setShowAdd((s) => !s)}>
             {showAdd ? "Close" : "+ Add thread"}
           </button>
@@ -450,9 +494,14 @@ export function FollowUpDashboard({
             <input
               type="number"
               min={0}
+              inputMode="numeric"
               className="inp w-16 py-1 text-center"
-              value={staleDays}
-              onChange={(e) => setStaleDays(Math.max(0, Number(e.target.value) || 0))}
+              value={staleDays === 0 ? "" : staleDays}
+              placeholder="0"
+              onChange={(e) => {
+                const v = e.target.value;
+                setStaleDays(v === "" ? 0 : Math.max(0, Math.floor(Number(v)) || 0));
+              }}
             />
             days
           </span>
@@ -486,15 +535,24 @@ export function FollowUpDashboard({
                       {t.subject || <span className="text-ink-faint">(no subject)</span>}
                     </p>
                     <p className="mt-0.5 text-xs text-ink-faint">
-                      Last emailed {d} day{d === 1 ? "" : "s"} ago
-                      {t.last_inbound_at ? " · replied" : ""}
+                      {t.last_inbound_at ? "Replied" : "Awaiting reply"}
                       {t.meeting_at ? " · meeting on file" : ""}
+                      {t.source !== "manual" ? ` · via ${t.source}` : ""}
                     </p>
                   </div>
-                  <span className={`inline-flex shrink-0 items-center gap-1.5 font-mono text-[11px] ${meta.text}`}>
-                    <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} aria-hidden />
-                    {meta.label}
-                  </span>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span
+                      className="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold text-white"
+                      style={{ backgroundColor: daysColor(d) }}
+                      title={`Last emailed ${d} day${d === 1 ? "" : "s"} ago`}
+                    >
+                      {d}d{t.status === "no_answer" ? " · no reply" : ""}
+                    </span>
+                    <span className={`inline-flex items-center gap-1.5 font-mono text-[11px] ${meta.text}`}>
+                      <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} aria-hidden />
+                      {meta.label}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="mt-3 flex flex-wrap gap-1.5">

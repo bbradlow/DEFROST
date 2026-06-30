@@ -14,6 +14,7 @@ export type StylePrompt = {
   owner_id: string;
   name: string;
   body: string;
+  kind: "outreach" | "followup";
   created_at: string;
 };
 
