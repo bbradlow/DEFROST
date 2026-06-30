@@ -80,6 +80,37 @@ export async function POST(request: Request) {
     `emails: ${feed.emails.length} since ${sinceISO.slice(0, 10)} ` +
       `across ${feed.pages} page(s) [filter="${feed.filter}"]`,
   );
+  if (feed.pages >= 30) {
+    trace(
+      `note: hit the ${feed.pages}-page cap — there are more emails in this window than were ` +
+        `pulled. The /emails feed can't filter by sender, so older/extra emails may be truncated.`,
+    );
+  }
+
+  // Decisive breakdown: how many are sent vs received, and what the senders look like.
+  {
+    let nSent = 0;
+    let nRecv = 0;
+    let nOther = 0;
+    const sentFrom = new Set<string>();
+    const recvFrom = new Set<string>();
+    for (const e of feed.emails) {
+      const dir = (e.direction ?? "").toLowerCase();
+      const fromAddr = (e.from?.emailAddress ?? e.from?.person?.primaryEmailAddress ?? "").toLowerCase();
+      if (dir === "sent") {
+        nSent += 1;
+        if (sentFrom.size < 6 && fromAddr) sentFrom.add(fromAddr);
+      } else if (dir === "received") {
+        nRecv += 1;
+        if (recvFrom.size < 4 && fromAddr) recvFrom.add(fromAddr);
+      } else {
+        nOther += 1;
+      }
+    }
+    trace(`feed breakdown: sent=${nSent} received=${nRecv} other=${nOther}; matching against me=${meEmail}`);
+    trace(`sample 'sent' from-addresses: ${[...sentFrom].join(", ") || "(none)"}`);
+    trace(`sample 'received' from-addresses: ${[...recvFrom].join(", ") || "(none)"}`);
+  }
 
   // 3) Aggregate per external contact: my last outbound + their last reply.
   type Agg = { name: string; email: string; lastOut: string | null; lastIn: string | null };
@@ -102,7 +133,8 @@ export async function POST(request: Request) {
 
   let myOutbound = 0;
   for (const e of feed.emails) {
-    if (e.direction === "sent") {
+    const dir = (e.direction ?? "").toLowerCase();
+    if (dir === "sent") {
       // Only count emails *I* sent.
       if (!isMe(e.from)) continue;
       myOutbound += 1;
