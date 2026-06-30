@@ -70,13 +70,16 @@ export async function POST(request: Request) {
   // 2) Pull the email feed since the window.
   const feed = await fetchEmailsSince(sinceISO);
   if (!feed.ok) {
-    trace(`emails: FAILED status=${feed.status} raw=${feed.raw}`);
+    trace(`emails: FAILED status=${feed.status} filter="${feed.filter}" raw=${feed.raw}`);
     return NextResponse.json(
       { error: "Could not read emails from Affinity (see diagnostics).", debug: steps.join("\n") },
       { status: 200 },
     );
   }
-  trace(`emails: ${feed.emails.length} since ${sinceISO.slice(0, 10)} across ${feed.pages} page(s)`);
+  trace(
+    `emails: ${feed.emails.length} since ${sinceISO.slice(0, 10)} ` +
+      `across ${feed.pages} page(s) [filter="${feed.filter}"]`,
+  );
 
   // 3) Aggregate per external contact: my last outbound + their last reply.
   type Agg = { name: string; email: string; lastOut: string | null; lastIn: string | null };

@@ -74,7 +74,10 @@ type EmailPaged = { data: EmailV2[]; pagination: { prevUrl: string | null; nextU
  * Returns the collected emails plus a short trace. Bounded by maxPages.
  */
 export async function fetchEmailsSince(sinceISO: string, maxPages = 30) {
-  const filter = `sentAt>=${sinceISO}`;
+  // Affinity's filter grammar wants seconds-precision ISO (e.g. 2025-01-01T00:00:00Z);
+  // a millisecond fraction (…:00.123Z) is rejected as "Invalid filter provided".
+  const stamp = sinceISO.replace(/\.\d+Z$/, "Z").replace(/\.\d+([+-]\d\d:\d\d)$/, "$1");
+  const filter = `sentAt>=${stamp}`;
   const first = `${BASE}/emails?limit=100&filter=${encodeURIComponent(filter)}`;
   const emails: EmailV2[] = [];
   let url: string | null = first;
@@ -86,13 +89,13 @@ export async function fetchEmailsSince(sinceISO: string, maxPages = 30) {
     lastStatus = r.status;
     if (!firstRaw) firstRaw = r.raw;
     if (!r.ok || !r.data) {
-      return { ok: false, status: r.status, emails, pages, firstRaw, raw: r.raw };
+      return { ok: false, status: r.status, emails, pages, filter, firstRaw, raw: r.raw };
     }
     emails.push(...(r.data.data ?? []));
     url = r.data.pagination?.nextUrl ?? null;
     pages += 1;
   }
-  return { ok: true, status: lastStatus, emails, pages, firstRaw, raw: firstRaw };
+  return { ok: true, status: lastStatus, emails, pages, filter, firstRaw, raw: firstRaw };
 }
 
 export function attendeeName(a: Attendee): string {
