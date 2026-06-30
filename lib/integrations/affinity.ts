@@ -1,29 +1,28 @@
 /**
- * Affinity API v1 client (server-only). HTTP Basic auth, API key as the
- * PASSWORD with an empty username: Authorization: Basic base64(":" + key).
+ * Affinity API v2 client (server-only). Bearer auth: Authorization: Bearer <key>.
+ * Base https://api.affinity.co/v2. The same Affinity API key works for v2 as
+ * long as the account tier supports it (Scale / Advanced / Enterprise).
  *
- * Identity strategy: internal team members generally do NOT come back from the
- * external person search, so we identify the signed-in user from /auth/whoami
- * (the key's owner) rather than searching persons by email. Every call captures
- * a raw response snippet so the sync route can surface exactly what Affinity
- * returned.
+ * The v2 /emails endpoint is the key win: it returns every email the key owner
+ * can see, with direction (sent/received), from, to/cc, subject and sentAt —
+ * cursor-paginated and filterable by sentAt. That gives true per-user outbound
+ * plus automatic reply detection, with no per-contact/per-org fan-out.
  */
 
-const BASE = "https://api.affinity.co";
+const BASE = "https://api.affinity.co/v2";
 
 export function affinityConfigured(): boolean {
   return !!process.env.AFFINITY_API_KEY;
 }
 
 function authHeader(): string {
-  const key = process.env.AFFINITY_API_KEY ?? "";
-  return "Basic " + Buffer.from(`:${key}`).toString("base64");
+  return `Bearer ${process.env.AFFINITY_API_KEY ?? ""}`;
 }
 
 type Result<T> = { ok: boolean; status: number; data: T | null; raw: string };
 
-async function get<T>(path: string): Promise<Result<T>> {
-  const res = await fetch(`${BASE}${path}`, {
+async function getUrl<T>(url: string): Promise<Result<T>> {
+  const res = await fetch(url, {
     headers: { Authorization: authHeader(), Accept: "application/json" },
   });
   const text = await res.text().catch(() => "");
@@ -33,153 +32,71 @@ async function get<T>(path: string): Promise<Result<T>> {
   } catch {
     data = null;
   }
-  return { ok: res.ok, status: res.status, data, raw: text.slice(0, 400) };
+  return { ok: res.ok, status: res.status, data, raw: text.slice(0, 300) };
 }
 
-// whoami: { user: { id, firstName, lastName, emailAddress? }, tenant: { name } }
-export type AffinityWhoami = {
-  user?: Record<string, unknown> & {
-    id?: number;
-    firstName?: string;
-    lastName?: string;
-    emailAddress?: string;
-    email?: string;
-  };
-  tenant?: { id?: number; name?: string; subdomain?: string };
-  grant?: Record<string, unknown>;
+// ---- whoami ----------------------------------------------------------------
+
+export type WhoAmI = {
+  user?: { id: number; firstName: string; lastName: string | null; emailAddress: string };
+  tenant?: { id: number; name: string; subdomain: string };
+  grant?: { type: string; scopes: string[] };
 };
 
 export function whoami() {
-  return get<AffinityWhoami>("/auth/whoami");
+  return getUrl<WhoAmI>(`${BASE}/auth/whoami`);
 }
 
-export type AffinityPerson = {
-  id: number;
-  type: number;
-  first_name: string;
-  last_name: string;
-  primary_email: string | null;
-  emails: string[];
-  interaction_dates?: Record<string, string | null>;
-};
+// ---- emails ----------------------------------------------------------------
 
-export async function searchPersons(term: string, withInteractionDates = true) {
-  const qs = new URLSearchParams({ term });
-  if (withInteractionDates) qs.set("with_interaction_dates", "true");
-  const r = await get<{ persons?: AffinityPerson[] }>(`/persons?${qs.toString()}`);
-  return { ...r, persons: r.data?.persons ?? [] };
-}
-
-export type AffinityInteraction = {
+export type PersonData = {
   id: number;
-  type: number;
-  date?: string;
-  start_time?: string;
-  direction?: number;
-  persons?: AffinityPerson[];
-  attendees?: string[];
+  firstName: string | null;
+  lastName: string | null;
+  primaryEmailAddress: string | null;
+  type: "internal" | "collaborator" | "external";
 };
+export type Attendee = { emailAddress: string | null; person: PersonData | null };
+export type AttendeesPreview = { data: Attendee[]; totalCount: number };
+export type EmailV2 = {
+  id: number;
+  sentAt: string;
+  direction: "sent" | "received";
+  subject: string | null;
+  from: Attendee;
+  toParticipantsPreview: AttendeesPreview;
+  ccParticipantsPreview: AttendeesPreview;
+};
+type EmailPaged = { data: EmailV2[]; pagination: { prevUrl: string | null; nextUrl: string | null } };
 
 /**
- * Recent interactions for a person. v1 listing semantics are uncertain, so we
- * return the raw response too; the route logs it for tuning.
+ * Pull all emails sent on/after `sinceISO`, following cursor pagination.
+ * Returns the collected emails plus a short trace. Bounded by maxPages.
  */
-export async function getPersonInteractions(personId: number, startDate?: string) {
-  const qs = new URLSearchParams({ person_id: String(personId) });
-  if (startDate) qs.set("start_date", startDate);
-  return get<{ interactions?: AffinityInteraction[]; emails?: AffinityInteraction[] }>(
-    `/interactions?${qs.toString()}`,
-  );
+export async function fetchEmailsSince(sinceISO: string, maxPages = 30) {
+  const filter = `sentAt>=${sinceISO}`;
+  const first = `${BASE}/emails?limit=100&filter=${encodeURIComponent(filter)}`;
+  const emails: EmailV2[] = [];
+  let url: string | null = first;
+  let pages = 0;
+  let lastStatus = 0;
+  let firstRaw = "";
+  while (url && pages < maxPages) {
+    const r: Result<EmailPaged> = await getUrl<EmailPaged>(url);
+    lastStatus = r.status;
+    if (!firstRaw) firstRaw = r.raw;
+    if (!r.ok || !r.data) {
+      return { ok: false, status: r.status, emails, pages, firstRaw, raw: r.raw };
+    }
+    emails.push(...(r.data.data ?? []));
+    url = r.data.pagination?.nextUrl ?? null;
+    pages += 1;
+  }
+  return { ok: true, status: lastStatus, emails, pages, firstRaw, raw: firstRaw };
 }
 
-/** Pull the most likely email field off the whoami user object. */
-export function whoamiEmail(w: AffinityWhoami | null): string {
-  const u = w?.user ?? {};
-  const candidates = [u.emailAddress, u.email].filter(Boolean) as string[];
-  return candidates[0] ?? "";
-}
-
-// --- List / organization reads (for pipeline-driven sync) -------------------
-
-export type AffinityListEntry = {
-  id: number;
-  entity_type: number; // 0 person, 1 organization, 8 opportunity
-  entity_id: number;
-  entity?: { id: number; name?: string; organization_ids?: number[] };
-};
-
-function entriesFrom(data: unknown): { entries: AffinityListEntry[]; next: string | null } {
-  if (Array.isArray(data)) return { entries: data as AffinityListEntry[], next: null };
-  const obj = (data ?? {}) as Record<string, unknown>;
-  const entries = (obj.list_entries ?? obj.entries ?? []) as AffinityListEntry[];
-  const next = (obj.next_page_token ?? null) as string | null;
-  return { entries, next };
-}
-
-export async function getListEntries(listId: number, pageToken?: string, pageSize = 500) {
-  const qs = new URLSearchParams({ page_size: String(pageSize) });
-  if (pageToken) qs.set("page_token", pageToken);
-  const r = await get<unknown>(`/lists/${listId}/list-entries?${qs.toString()}`);
-  return { ...r, ...entriesFrom(r.data) };
-}
-
-export async function getSavedViewEntries(
-  listId: number,
-  viewId: number,
-  pageToken?: string,
-  pageSize = 500,
-) {
-  const qs = new URLSearchParams({ page_size: String(pageSize) });
-  if (pageToken) qs.set("page_token", pageToken);
-  const r = await get<unknown>(
-    `/lists/${listId}/saved-views/${viewId}/list-entries?${qs.toString()}`,
-  );
-  return { ...r, ...entriesFrom(r.data) };
-}
-
-export type AffinityOrganization = {
-  id: number;
-  name?: string;
-  domain?: string | null;
-  domains?: string[];
-  person_ids?: number[];
-  interaction_dates?: Record<string, string | null>;
-};
-
-export function getOrganization(orgId: number) {
-  return get<AffinityOrganization>(`/organizations/${orgId}?with_interaction_dates=true`);
-}
-
-export type AffinityOpportunity = {
-  id: number;
-  name?: string;
-  organization_ids?: number[];
-};
-
-export function getOpportunity(oppId: number) {
-  return get<AffinityOpportunity>(`/opportunities/${oppId}`);
-}
-
-/** Best last-email/interaction date from an interaction_dates object. */
-export function lastEmailDate(d?: Record<string, string | null>): string {
-  if (!d) return "";
-  return (
-    d.last_email_date ||
-    d.last_interaction_date ||
-    d.last_chat_message_date ||
-    d.last_event_date ||
-    ""
-  );
-}
-
-export type AffinitySavedView = { id: number; name: string; type?: number };
-
-export async function getSavedViews(listId: number) {
-  const r = await get<{ saved_views?: AffinitySavedView[] }>(
-    `/lists/${listId}/saved-views`,
-  );
-  const views = Array.isArray(r.data)
-    ? (r.data as AffinitySavedView[])
-    : (r.data?.saved_views ?? []);
-  return { ...r, views };
+export function attendeeName(a: Attendee): string {
+  const p = a.person;
+  const nm = p ? `${p.firstName ?? ""} ${p.lastName ?? ""}`.trim() : "";
+  return nm || a.emailAddress || "Unknown";
 }

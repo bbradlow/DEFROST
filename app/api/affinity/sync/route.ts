@@ -3,19 +3,16 @@ import { createClient } from "@/lib/supabase/server";
 import {
   affinityConfigured,
   whoami,
-  whoamiEmail,
-  getListEntries,
-  getSavedViewEntries,
-  getOrganization,
-  getOpportunity,
-  getSavedViews,
-  lastEmailDate,
-  type AffinityListEntry,
+  fetchEmailsSince,
+  attendeeName,
+  type Attendee,
 } from "@/lib/integrations/affinity";
 
 export const maxDuration = 60;
 
-const DEFAULT_LIST_ID = 93884; // Activant master pipeline
+function daysAgoISO(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
+}
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -30,164 +27,142 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: { listId?: number; view?: string; viewId?: number; sinceDays?: number; maxOrgs?: number };
+  const ownerEmail = (user.email ?? "").trim().toLowerCase();
+  let body: { sinceDays?: number };
   try {
     body = await request.json();
   } catch {
     body = {};
   }
-  const listId = Number(body.listId) || DEFAULT_LIST_ID;
-  const viewInput = (body.view ?? (body.viewId ? String(body.viewId) : "")).trim();
   const sinceDays = Math.max(1, Math.min(3650, body.sinceDays ?? 90));
-  const maxOrgs = Math.max(1, Math.min(300, body.maxOrgs ?? 150));
-  const sinceMs = Date.now() - sinceDays * 86_400_000;
+  const sinceISO = daysAgoISO(sinceDays);
 
   const steps: string[] = [];
   const trace = (s: string) => {
     steps.push(s);
-    console.log(`[affinity] ${user.email}: ${s}`);
+    console.log(`[affinity] ${ownerEmail}: ${s}`);
   };
 
-  // 1) Verify the key / identify the owner.
+  // 1) Verify the key + identify the key owner (v2 is Bearer auth).
   const who = await whoami();
   if (!who.ok || !who.data?.user) {
     trace(`whoami: FAILED status=${who.status} raw=${who.raw}`);
     return NextResponse.json(
-      { error: "Affinity rejected the API key.", debug: steps.join("\n") },
+      {
+        error:
+          who.status === 401
+            ? "Affinity rejected the key for v2 (check the key / that your tier includes API v2)."
+            : "Affinity whoami failed.",
+        debug: steps.join("\n"),
+      },
       { status: 400 },
     );
   }
-  trace(
-    `whoami: ok tenant="${who.data.tenant?.name ?? "?"}" as ${whoamiEmail(who.data) || user.email}`,
-  );
+  const keyEmail = (who.data.user.emailAddress ?? "").toLowerCase();
+  trace(`whoami: ok tenant="${who.data.tenant?.name ?? "?"}" key owner=${keyEmail}`);
+  // We attribute "my" sent emails to the key owner (that's whose mailbox the
+  // key can see). If the DEFROST login differs, note it.
+  const meEmail = keyEmail || ownerEmail;
+  if (ownerEmail && keyEmail && ownerEmail !== keyEmail) {
+    trace(`note: DEFROST login ${ownerEmail} differs from key owner ${keyEmail}; attributing to key owner`);
+  }
 
-  // Resolve a saved view (accepts a name or a numeric id).
-  let viewId: number | null = null;
-  if (viewInput) {
-    if (/^\d+$/.test(viewInput)) {
-      viewId = Number(viewInput);
+  // 2) Pull the email feed since the window.
+  const feed = await fetchEmailsSince(sinceISO);
+  if (!feed.ok) {
+    trace(`emails: FAILED status=${feed.status} raw=${feed.raw}`);
+    return NextResponse.json(
+      { error: "Could not read emails from Affinity (see diagnostics).", debug: steps.join("\n") },
+      { status: 200 },
+    );
+  }
+  trace(`emails: ${feed.emails.length} since ${sinceISO.slice(0, 10)} across ${feed.pages} page(s)`);
+
+  // 3) Aggregate per external contact: my last outbound + their last reply.
+  type Agg = { name: string; email: string; lastOut: string | null; lastIn: string | null };
+  const byContact = new Map<string, Agg>();
+  const isMe = (a: Attendee) =>
+    (a.emailAddress ?? "").toLowerCase() === meEmail ||
+    (a.person?.primaryEmailAddress ?? "").toLowerCase() === meEmail;
+  const isInternal = (a: Attendee) => a.person?.type === "internal";
+
+  const upsertAgg = (a: Attendee, when: string, dir: "out" | "in") => {
+    const email = (a.emailAddress ?? a.person?.primaryEmailAddress ?? "").toLowerCase();
+    if (!email) return;
+    const cur =
+      byContact.get(email) ?? { name: attendeeName(a), email, lastOut: null, lastIn: null };
+    if (dir === "out" && (!cur.lastOut || when > cur.lastOut)) cur.lastOut = when;
+    if (dir === "in" && (!cur.lastIn || when > cur.lastIn)) cur.lastIn = when;
+    if (cur.name === email && attendeeName(a) !== email) cur.name = attendeeName(a);
+    byContact.set(email, cur);
+  };
+
+  let myOutbound = 0;
+  for (const e of feed.emails) {
+    if (e.direction === "sent") {
+      // Only count emails *I* sent.
+      if (!isMe(e.from)) continue;
+      myOutbound += 1;
+      for (const to of [...e.toParticipantsPreview.data, ...e.ccParticipantsPreview.data]) {
+        if (isMe(to) || isInternal(to)) continue; // skip myself + teammates
+        upsertAgg(to, e.sentAt, "out");
+      }
     } else {
-      const sv = await getSavedViews(listId);
-      const match = sv.views.find(
-        (v) => v.name.toLowerCase() === viewInput.toLowerCase(),
-      );
-      viewId = match?.id ?? null;
-      trace(
-        `saved-view: "${viewInput}" -> ${viewId ?? "NOT FOUND"} ` +
-          `(available: ${sv.views.map((v) => v.name).join(", ") || "none"})`,
-      );
-      if (!viewId) {
-        return NextResponse.json(
-          { error: `Saved view "${viewInput}" not found in list ${listId}.`, debug: steps.join("\n") },
-          { status: 404 },
-        );
-      }
+      // received: from = external contact, to = internal (possibly me)
+      if (isMe(e.from) || isInternal(e.from)) continue;
+      upsertAgg(e.from, e.sentAt, "in");
     }
   }
+  trace(`parsed: ${myOutbound} email(s) I sent; ${byContact.size} contact(s) touched`);
 
-  // 2) Pull the pipeline entries (list or saved view), paginating a few pages.
-  let entries: AffinityListEntry[] = [];
-  let token: string | undefined;
-  let pages = 0;
-  let firstRaw = "";
-  do {
-    const r = viewId
-      ? await getSavedViewEntries(listId, viewId, token)
-      : await getListEntries(listId, token);
-    if (!r.ok) {
-      trace(`entries: FAILED status=${r.status} raw=${r.raw}`);
-      return NextResponse.json(
-        { error: `Could not read list ${listId} (see diagnostics).`, debug: steps.join("\n") },
-        { status: 200 },
-      );
-    }
-    if (!firstRaw) firstRaw = r.raw;
-    entries = entries.concat(r.entries);
-    token = r.next ?? undefined;
-    pages += 1;
-  } while (token && pages < 5 && entries.length < maxOrgs * 2);
+  // Keep only contacts I actually emailed (have an outbound).
+  const contacts = [...byContact.values()].filter((c) => c.lastOut);
+  trace(`contacts with my outbound: ${contacts.length}`);
 
-  const typeCounts = entries.reduce<Record<number, number>>((m, e) => {
-    m[e.entity_type] = (m[e.entity_type] ?? 0) + 1;
-    return m;
-  }, {});
-  trace(
-    `entries: ${entries.length} from ${viewId ? `view ${viewId}` : `list ${listId}`} ` +
-      `types=${JSON.stringify(typeCounts)} sample=${firstRaw}`,
-  );
-
-  // 3) Resolve organization ids from entries (org=1 direct; opportunity=8 via lookup).
-  const orgIds = new Set<number>();
-  let oppLookups = 0;
-  for (const e of entries) {
-    if (orgIds.size >= maxOrgs) break;
-    if (e.entity_type === 1) {
-      orgIds.add(e.entity_id || e.entity?.id || 0);
-    } else if (e.entity_type === 8) {
-      const direct = e.entity?.organization_ids;
-      if (direct?.length) direct.forEach((id) => orgIds.add(id));
-      else if (oppLookups < maxOrgs) {
-        oppLookups += 1;
-        const opp = await getOpportunity(e.entity_id || e.entity?.id || 0);
-        opp.data?.organization_ids?.forEach((id) => orgIds.add(id));
-      }
-    }
-  }
-  orgIds.delete(0);
-  trace(`organizations: ${orgIds.size} resolved (opportunity lookups=${oppLookups})`);
-
-  // 4) For each org, read interaction dates; keep those emailed within the window.
+  // 4) Upsert into email_threads, deduped by source_ref = email:<contact>.
   const { data: existing } = await supabase
     .from("email_threads")
-    .select("id, source_ref, last_outbound_at");
+    .select("id, source_ref, last_outbound_at, status");
   const byRef = new Map(
     (existing ?? []).filter((t) => t.source_ref).map((t) => [t.source_ref as string, t]),
   );
 
   let added = 0;
   let updated = 0;
-  let skippedOld = 0;
-  let skippedNoDate = 0;
-  let processed = 0;
-  for (const orgId of orgIds) {
-    if (processed >= maxOrgs) break;
-    processed += 1;
-    const org = await getOrganization(orgId);
-    if (!org.ok || !org.data) continue;
-    const when = lastEmailDate(org.data.interaction_dates);
-    if (!when) {
-      skippedNoDate += 1;
-      continue;
-    }
-    if (Date.parse(when) < sinceMs) {
-      skippedOld += 1;
-      continue;
-    }
-    const ref = `org:${orgId}`;
+  let answered = 0;
+  for (const c of contacts) {
+    const ref = `email:${c.email}`;
+    const replied = !!c.lastIn && (!c.lastOut || c.lastIn >= c.lastOut);
+    const status = replied ? "answered" : "no_answer";
+    if (replied) answered += 1;
     const ex = byRef.get(ref);
     if (!ex) {
       const { error } = await supabase.from("email_threads").insert({
         owner_id: user.id,
-        contact_name: org.data.name ?? `Org ${orgId}`,
-        contact_email: null,
-        company: org.data.name ?? null,
-        last_outbound_at: when,
-        status: "no_answer",
+        contact_name: c.name,
+        contact_email: c.email,
+        last_outbound_at: c.lastOut,
+        last_inbound_at: c.lastIn,
+        status,
         source: "affinity",
         source_ref: ref,
       });
       if (!error) added += 1;
-    } else if (when > ex.last_outbound_at) {
+    } else {
+      // don't downgrade a manually-set meeting
+      const newStatus = ex.status === "meeting_set" ? "meeting_set" : status;
       const { error } = await supabase
         .from("email_threads")
-        .update({ last_outbound_at: when })
+        .update({
+          last_outbound_at: c.lastOut,
+          last_inbound_at: c.lastIn,
+          status: newStatus,
+        })
         .eq("id", ex.id);
       if (!error) updated += 1;
     }
   }
-  trace(
-    `upsert: added=${added} updated=${updated} skipped(old=${skippedOld}, no-date=${skippedNoDate}) processed=${processed}`,
-  );
+  trace(`upsert: added=${added} updated=${updated} (answered=${answered})`);
 
-  return NextResponse.json({ added, updated, debug: steps.join("\n") });
+  return NextResponse.json({ added, updated, answered, debug: steps.join("\n") });
 }

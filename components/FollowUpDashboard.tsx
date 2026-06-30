@@ -120,7 +120,7 @@ export function FollowUpDashboard({
   const [segment, setSegment] = useState<Segment>("no_answer");
   const [staleDays, setStaleDays] = useState(0);
   const [filterOp, setFilterOp] = useState<">=" | "<=" | "=">(">=");
-  const [sortBy, setSortBy] = useState<"oldest" | "recent" | "company_az" | "company_za">("oldest");
+  const [sortBy, setSortBy] = useState<"oldest" | "recent" | "company_az" | "company_za">("recent");
   const [search, setSearch] = useState("");
   const [writerId, setWriterId] = useState<string>(writers[0]?.id ?? "");
   const [promptId, setPromptId] = useState<string>("");
@@ -162,17 +162,6 @@ export function FollowUpDashboard({
 
   const [syncing, setSyncing] = useState<null | "affinity" | "calendly">(null);
   const [syncDebug, setSyncDebug] = useState<string | null>(null);
-  const [affinityListId, setAffinityListId] = useState("93884");
-  const [affinityViewId, setAffinityViewId] = useState("");
-
-  useEffect(() => {
-    try {
-      const l = localStorage.getItem("co:affinityListId");
-      if (l) setAffinityListId(l);
-      const v = localStorage.getItem("co:affinityViewId");
-      if (v) setAffinityViewId(v);
-    } catch {}
-  }, []);
 
   // Surface the result of the Calendly OAuth redirect (?calendly=connected|error).
   useEffect(() => {
@@ -200,11 +189,7 @@ export function FollowUpDashboard({
       const res = await fetch("/api/affinity/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          listId: Number(affinityListId) || 93884,
-          view: affinityViewId.trim() || undefined,
-          sinceDays: 90,
-        }),
+        body: JSON.stringify({ sinceDays: 90 }),
       });
       const data = await res.json();
       if (data.debug) setSyncDebug(data.debug);
@@ -431,46 +416,29 @@ export function FollowUpDashboard({
         </div>
       </div>
 
-      {/* Integrations */}
-      <div className="mb-5 flex flex-wrap items-center gap-2 text-xs">
-        <button
-          className="btn btn-ghost py-1 text-xs"
-          disabled={!affinityReady || syncing !== null}
-          onClick={syncAffinity}
-          title={affinityReady ? "Pull organizations from your Affinity pipeline" : "Set AFFINITY_API_KEY on the server"}
-        >
-          {syncing === "affinity" ? "Syncing Affinity…" : "Sync from Affinity"}
-        </button>
-        {affinityReady && (
-          <span className="inline-flex items-center gap-1 text-ink-faint">
-            list
-            <input
-              className="inp w-14 py-1 text-center text-xs"
-              value={affinityListId}
-              onChange={(e) => {
-                setAffinityListId(e.target.value);
-                try { localStorage.setItem("co:affinityListId", e.target.value); } catch {}
-              }}
-              title="Affinity list id (default 93884 = master pipeline)"
-            />
-            view
-            <input
-              className="inp w-28 py-1 text-xs"
-              value={affinityViewId}
-              placeholder="My Deals"
-              onChange={(e) => {
-                setAffinityViewId(e.target.value);
-                try { localStorage.setItem("co:affinityViewId", e.target.value); } catch {}
-              }}
-              title="Optional saved-view name or id within the list"
-            />
-          </span>
-        )}
+      {/* Sources */}
+      <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-line bg-panel px-4 py-3">
+        <span className="text-xs font-medium uppercase tracking-wide text-ink-faint">
+          Sources
+        </span>
 
+        {/* Affinity group */}
+        <div className="flex items-center gap-2">
+          <button
+            className="btn btn-ghost py-1 text-xs"
+            disabled={!affinityReady || syncing !== null}
+            onClick={syncAffinity}
+            title={affinityReady ? "Pull the emails you've sent (and replies) from Affinity" : "Set AFFINITY_API_KEY on the server"}
+          >
+            {syncing === "affinity" ? "Syncing Affinity…" : "Sync from Affinity"}
+          </button>
+        </div>
+
+        <span className="h-5 w-px bg-line" aria-hidden />
+
+        {/* Calendly */}
         {!calendlyReady ? (
-          <span className="inline-flex items-center gap-1.5 rounded border border-line bg-panel px-2.5 py-1 text-ink-faint">
-            Calendly: not configured
-          </span>
+          <span className="text-xs text-ink-faint">Calendly: not configured</span>
         ) : calendlyConnected ? (
           <button
             className="btn btn-ghost py-1 text-xs"
@@ -487,7 +455,7 @@ export function FollowUpDashboard({
         )}
 
         {!affinityReady && (
-          <span className="text-ink-faint">Affinity: set AFFINITY_API_KEY to enable.</span>
+          <span className="text-xs text-ink-faint">Affinity: set AFFINITY_API_KEY to enable.</span>
         )}
       </div>
 
@@ -539,48 +507,51 @@ export function FollowUpDashboard({
         </div>
       )}
 
-      {/* Controls */}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+      {/* Segment tabs as a segmented control */}
+      <div className="mb-3 inline-flex flex-wrap gap-1 rounded-lg border border-line bg-panel p-1">
         {segTab("all", "All", counts.all)}
         {segTab("no_answer", "No answer", counts.no_answer)}
         {segTab("answered", "Answered", counts.answered)}
         {segTab("meeting_set", "Meeting set", counts.meeting_set)}
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+      {/* Search · sort · filter toolbar */}
+      <div className="mb-5 flex flex-wrap items-center gap-x-5 gap-y-3">
         <input
-          className="inp w-56 py-1 text-sm"
+          className="inp h-9 w-64 text-sm"
           placeholder="Search company or contact…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
 
-        <span className="inline-flex items-center gap-1.5 text-sm text-ink-soft">
-          Sort
+        <label className="inline-flex items-center gap-2 text-sm text-ink-soft">
+          <span className="text-ink-faint">Sort</span>
           <select
-            className="inp w-36 py-1 text-sm"
+            className="inp h-9 w-40 text-sm"
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
           >
-            <option value="oldest">Least recent first</option>
             <option value="recent">Most recent first</option>
+            <option value="oldest">Least recent first</option>
             <option value="company_az">Company A–Z</option>
             <option value="company_za">Company Z–A</option>
           </select>
-        </span>
+        </label>
 
         {(segment === "no_answer" || segment === "all") && (
-          <span className="ml-auto inline-flex items-center gap-1.5 text-sm text-ink-soft">
-            No response
-            <span className="inline-flex overflow-hidden rounded border border-line">
+          <div className="ml-auto inline-flex items-center gap-2 text-sm text-ink-soft">
+            <span className="text-ink-faint">No response</span>
+            <span className="inline-flex h-9 overflow-hidden rounded-md border border-line">
               {(["\u2265", "\u2264", "="] as const).map((sym, i) => {
                 const op = (["\u003e=", "\u003c=", "="] as const)[i];
                 return (
                   <button
                     key={op}
                     onClick={() => setFilterOp(op)}
-                    className={`px-2 py-1 text-sm ${
-                      filterOp === op ? "bg-accent text-white" : "bg-panel text-ink-soft hover:bg-accent-soft"
+                    className={`w-9 text-base leading-none ${
+                      filterOp === op
+                        ? "bg-accent text-white"
+                        : "bg-panel text-ink-soft hover:bg-accent-soft"
                     }`}
                   >
                     {sym}
@@ -592,7 +563,7 @@ export function FollowUpDashboard({
               type="number"
               min={0}
               inputMode="numeric"
-              className="inp w-12 py-1 text-center"
+              className="inp h-9 w-14 text-center"
               value={staleDays === 0 ? "" : staleDays}
               placeholder="0"
               onChange={(e) => {
@@ -600,8 +571,8 @@ export function FollowUpDashboard({
                 setStaleDays(v === "" ? 0 : Math.max(0, Math.floor(Number(v)) || 0));
               }}
             />
-            days
-          </span>
+            <span className="text-ink-faint">days</span>
+          </div>
         )}
       </div>
 
