@@ -109,6 +109,17 @@ export function FollowUpDashboard({
 
   const [syncing, setSyncing] = useState<null | "affinity" | "calendly">(null);
   const [syncDebug, setSyncDebug] = useState<string | null>(null);
+  const [affinityListId, setAffinityListId] = useState("93884");
+  const [affinityViewId, setAffinityViewId] = useState("");
+
+  useEffect(() => {
+    try {
+      const l = localStorage.getItem("co:affinityListId");
+      if (l) setAffinityListId(l);
+      const v = localStorage.getItem("co:affinityViewId");
+      if (v) setAffinityViewId(v);
+    } catch {}
+  }, []);
 
   // Surface the result of the Calendly OAuth redirect (?calendly=connected|error).
   useEffect(() => {
@@ -136,7 +147,11 @@ export function FollowUpDashboard({
       const res = await fetch("/api/affinity/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sinceDays: 30 }),
+        body: JSON.stringify({
+          listId: Number(affinityListId) || 93884,
+          viewId: affinityViewId ? Number(affinityViewId) : undefined,
+          sinceDays: 90,
+        }),
       });
       const data = await res.json();
       if (data.debug) setSyncDebug(data.debug);
@@ -321,10 +336,35 @@ export function FollowUpDashboard({
           className="btn btn-ghost py-1 text-xs"
           disabled={!affinityReady || syncing !== null}
           onClick={syncAffinity}
-          title={affinityReady ? "Pull your recent logged emails from Affinity" : "Set AFFINITY_API_KEY on the server"}
+          title={affinityReady ? "Pull organizations from your Affinity pipeline" : "Set AFFINITY_API_KEY on the server"}
         >
           {syncing === "affinity" ? "Syncing Affinity…" : "Sync from Affinity"}
         </button>
+        {affinityReady && (
+          <span className="inline-flex items-center gap-1 text-ink-faint">
+            list
+            <input
+              className="inp w-20 py-1 text-center text-xs"
+              value={affinityListId}
+              onChange={(e) => {
+                setAffinityListId(e.target.value);
+                try { localStorage.setItem("co:affinityListId", e.target.value); } catch {}
+              }}
+              title="Affinity list id (default 93884 = master pipeline)"
+            />
+            view
+            <input
+              className="inp w-20 py-1 text-center text-xs"
+              value={affinityViewId}
+              placeholder="(opt)"
+              onChange={(e) => {
+                setAffinityViewId(e.target.value);
+                try { localStorage.setItem("co:affinityViewId", e.target.value); } catch {}
+              }}
+              title="Optional saved-view id within the list"
+            />
+          </span>
+        )}
 
         {!calendlyReady ? (
           <span className="inline-flex items-center gap-1.5 rounded border border-line bg-panel px-2.5 py-1 text-ink-faint">
@@ -436,8 +476,10 @@ export function FollowUpDashboard({
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="font-medium text-ink">
-                      {t.contact_name}{" "}
-                      <span className="font-normal text-ink-faint">· {t.contact_email}</span>
+                      {t.contact_name}
+                      {t.contact_email && (
+                        <span className="font-normal text-ink-faint"> · {t.contact_email}</span>
+                      )}
                     </p>
                     <p className="text-sm text-ink-soft">
                       {t.company ? `${t.company} — ` : ""}

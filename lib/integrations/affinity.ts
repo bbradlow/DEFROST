@@ -98,3 +98,76 @@ export function whoamiEmail(w: AffinityWhoami | null): string {
   const candidates = [u.emailAddress, u.email].filter(Boolean) as string[];
   return candidates[0] ?? "";
 }
+
+// --- List / organization reads (for pipeline-driven sync) -------------------
+
+export type AffinityListEntry = {
+  id: number;
+  entity_type: number; // 0 person, 1 organization, 8 opportunity
+  entity_id: number;
+  entity?: { id: number; name?: string; organization_ids?: number[] };
+};
+
+function entriesFrom(data: unknown): { entries: AffinityListEntry[]; next: string | null } {
+  if (Array.isArray(data)) return { entries: data as AffinityListEntry[], next: null };
+  const obj = (data ?? {}) as Record<string, unknown>;
+  const entries = (obj.list_entries ?? obj.entries ?? []) as AffinityListEntry[];
+  const next = (obj.next_page_token ?? null) as string | null;
+  return { entries, next };
+}
+
+export async function getListEntries(listId: number, pageToken?: string, pageSize = 500) {
+  const qs = new URLSearchParams({ page_size: String(pageSize) });
+  if (pageToken) qs.set("page_token", pageToken);
+  const r = await get<unknown>(`/lists/${listId}/list-entries?${qs.toString()}`);
+  return { ...r, ...entriesFrom(r.data) };
+}
+
+export async function getSavedViewEntries(
+  listId: number,
+  viewId: number,
+  pageToken?: string,
+  pageSize = 500,
+) {
+  const qs = new URLSearchParams({ page_size: String(pageSize) });
+  if (pageToken) qs.set("page_token", pageToken);
+  const r = await get<unknown>(
+    `/lists/${listId}/saved-views/${viewId}/list-entries?${qs.toString()}`,
+  );
+  return { ...r, ...entriesFrom(r.data) };
+}
+
+export type AffinityOrganization = {
+  id: number;
+  name?: string;
+  domain?: string | null;
+  domains?: string[];
+  person_ids?: number[];
+  interaction_dates?: Record<string, string | null>;
+};
+
+export function getOrganization(orgId: number) {
+  return get<AffinityOrganization>(`/organizations/${orgId}?with_interaction_dates=true`);
+}
+
+export type AffinityOpportunity = {
+  id: number;
+  name?: string;
+  organization_ids?: number[];
+};
+
+export function getOpportunity(oppId: number) {
+  return get<AffinityOpportunity>(`/opportunities/${oppId}`);
+}
+
+/** Best last-email/interaction date from an interaction_dates object. */
+export function lastEmailDate(d?: Record<string, string | null>): string {
+  if (!d) return "";
+  return (
+    d.last_email_date ||
+    d.last_interaction_date ||
+    d.last_chat_message_date ||
+    d.last_event_date ||
+    ""
+  );
+}

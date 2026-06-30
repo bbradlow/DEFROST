@@ -37,7 +37,9 @@ export async function POST(request: Request) {
       .from("email_threads")
       .select("id, contact_email, status");
     const byEmail = new Map(
-      (threads ?? []).map((t) => [t.contact_email.toLowerCase(), t]),
+      (threads ?? [])
+        .filter((t) => t.contact_email)
+        .map((t) => [t.contact_email!.toLowerCase(), t]),
     );
 
     let matched = 0;

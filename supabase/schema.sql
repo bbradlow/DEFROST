@@ -95,7 +95,7 @@ create table if not exists public.email_threads (
   id                uuid primary key default gen_random_uuid(),
   owner_id          uuid not null references auth.users (id) on delete cascade,
   contact_name      text not null,
-  contact_email     text not null,
+  contact_email     text,
   company           text,
   subject           text,
   last_outbound_at  timestamptz not null default now(),
@@ -106,6 +106,7 @@ create table if not exists public.email_threads (
   snippet           text,
   source            text not null default 'manual',
   thread_url        text,
+  source_ref        text,
   created_at        timestamptz not null default now()
 );
 

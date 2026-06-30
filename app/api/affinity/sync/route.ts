@@ -4,17 +4,17 @@ import {
   affinityConfigured,
   whoami,
   whoamiEmail,
-  searchPersons,
-  getPersonInteractions,
-  type AffinityInteraction,
-  type AffinityPerson,
+  getListEntries,
+  getSavedViewEntries,
+  getOrganization,
+  getOpportunity,
+  lastEmailDate,
+  type AffinityListEntry,
 } from "@/lib/integrations/affinity";
 
 export const maxDuration = 60;
 
-function daysAgoISO(days: number): string {
-  return new Date(Date.now() - days * 86_400_000).toISOString();
-}
+const DEFAULT_LIST_ID = 93884; // Activant master pipeline
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -29,22 +29,25 @@ export async function POST(request: Request) {
     );
   }
 
-  const ownerEmail = (user.email ?? "").trim();
-  let body: { sinceDays?: number };
+  let body: { listId?: number; viewId?: number; sinceDays?: number; maxOrgs?: number };
   try {
     body = await request.json();
   } catch {
     body = {};
   }
-  const sinceDays = Math.max(1, Math.min(365, body.sinceDays ?? 30));
+  const listId = Number(body.listId) || DEFAULT_LIST_ID;
+  const viewId = body.viewId ? Number(body.viewId) : null;
+  const sinceDays = Math.max(1, Math.min(3650, body.sinceDays ?? 90));
+  const maxOrgs = Math.max(1, Math.min(300, body.maxOrgs ?? 150));
+  const sinceMs = Date.now() - sinceDays * 86_400_000;
 
   const steps: string[] = [];
   const trace = (s: string) => {
     steps.push(s);
-    console.log(`[affinity] ${ownerEmail}: ${s}`);
+    console.log(`[affinity] ${user.email}: ${s}`);
   };
 
-  // 1) whoami — verify key and identify the key's owner (that's the user).
+  // 1) Verify the key / identify the owner.
   const who = await whoami();
   if (!who.ok || !who.data?.user) {
     trace(`whoami: FAILED status=${who.status} raw=${who.raw}`);
@@ -53,118 +56,113 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  const meUser = who.data.user;
-  const meId = typeof meUser.id === "number" ? meUser.id : null;
-  const meEmailFromAffinity = whoamiEmail(who.data);
   trace(
-    `whoami: ok tenant="${who.data.tenant?.name ?? "?"}" user#${meId ?? "?"} ` +
-      `name="${`${meUser.firstName ?? ""} ${meUser.lastName ?? ""}`.trim()}" ` +
-      `email="${meEmailFromAffinity || "(no email field)"}" keys=[${Object.keys(meUser).join(",")}]`,
-  );
-  if (meEmailFromAffinity && meEmailFromAffinity.toLowerCase() !== ownerEmail.toLowerCase()) {
-    trace(
-      `note: Affinity key belongs to ${meEmailFromAffinity}, but you're logged into DEFROST as ${ownerEmail}`,
-    );
-  }
-
-  // 2) For diagnostics, show what the person search returns for your email.
-  const search = await searchPersons(ownerEmail);
-  trace(
-    `persons?term=${ownerEmail}: status=${search.status} count=${search.persons.length} raw=${search.raw}`,
+    `whoami: ok tenant="${who.data.tenant?.name ?? "?"}" as ${whoamiEmail(who.data) || user.email}`,
   );
 
-  // Pick the person id to read interactions for: prefer a search match,
-  // otherwise fall back to the whoami user id.
-  const lower = ownerEmail.toLowerCase();
-  const searchMatch =
-    search.persons.find(
-      (p) =>
-        (p.primary_email ?? "").toLowerCase() === lower ||
-        p.emails?.some((e) => e.toLowerCase() === lower),
-    ) ?? null;
-  const personId = searchMatch?.id ?? meId;
-  trace(
-    `identity: using ${searchMatch ? `person #${searchMatch.id} (search match)` : `whoami user #${meId} (fallback)`}`,
-  );
-  if (!personId) {
-    return NextResponse.json(
-      { error: "Could not resolve your Affinity person id.", debug: steps.join("\n") },
-      { status: 404 },
-    );
-  }
+  // 2) Pull the pipeline entries (list or saved view), paginating a few pages.
+  let entries: AffinityListEntry[] = [];
+  let token: string | undefined;
+  let pages = 0;
+  let firstRaw = "";
+  do {
+    const r = viewId
+      ? await getSavedViewEntries(listId, viewId, token)
+      : await getListEntries(listId, token);
+    if (!r.ok) {
+      trace(`entries: FAILED status=${r.status} raw=${r.raw}`);
+      return NextResponse.json(
+        { error: `Could not read list ${listId} (see diagnostics).`, debug: steps.join("\n") },
+        { status: 200 },
+      );
+    }
+    if (!firstRaw) firstRaw = r.raw;
+    entries = entries.concat(r.entries);
+    token = r.next ?? undefined;
+    pages += 1;
+  } while (token && pages < 5 && entries.length < maxOrgs * 2);
 
-  // 3) Read recent interactions for that person.
-  const since = daysAgoISO(sinceDays);
-  const inter = await getPersonInteractions(personId, since);
-  if (!inter.ok) {
-    trace(`interactions: status=${inter.status} raw=${inter.raw}`);
-    return NextResponse.json(
-      {
-        error: "Could not read interactions from Affinity (see diagnostics).",
-        debug: steps.join("\n"),
-      },
-      { status: 200 },
-    );
-  }
-  const raw: AffinityInteraction[] =
-    inter.data?.emails ?? inter.data?.interactions ?? [];
+  const typeCounts = entries.reduce<Record<number, number>>((m, e) => {
+    m[e.entity_type] = (m[e.entity_type] ?? 0) + 1;
+    return m;
+  }, {});
   trace(
-    `interactions: status=${inter.status} records=${raw.length} raw=${inter.raw}`,
+    `entries: ${entries.length} from ${viewId ? `view ${viewId}` : `list ${listId}`} ` +
+      `types=${JSON.stringify(typeCounts)} sample=${firstRaw}`,
   );
 
-  // 4) Build one prospective thread per external contact (latest email wins).
-  const myEmails = new Set(
-    [ownerEmail.toLowerCase(), meEmailFromAffinity.toLowerCase()].filter(Boolean),
-  );
-  const byEmail = new Map<string, { name: string; email: string; at: string }>();
-  for (const it of raw) {
-    const when = it.date ?? it.start_time ?? "";
-    const externals: AffinityPerson[] = (it.persons ?? []).filter(
-      (p) => !myEmails.has((p.primary_email ?? "").toLowerCase()),
-    );
-    for (const p of externals) {
-      const email = (p.primary_email ?? p.emails?.[0] ?? "").toLowerCase();
-      if (!email) continue;
-      const name = `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim() || email;
-      const prev = byEmail.get(email);
-      if (!prev || (when && when > prev.at)) byEmail.set(email, { name, email, at: when });
+  // 3) Resolve organization ids from entries (org=1 direct; opportunity=8 via lookup).
+  const orgIds = new Set<number>();
+  let oppLookups = 0;
+  for (const e of entries) {
+    if (orgIds.size >= maxOrgs) break;
+    if (e.entity_type === 1) {
+      orgIds.add(e.entity_id || e.entity?.id || 0);
+    } else if (e.entity_type === 8) {
+      const direct = e.entity?.organization_ids;
+      if (direct?.length) direct.forEach((id) => orgIds.add(id));
+      else if (oppLookups < maxOrgs) {
+        oppLookups += 1;
+        const opp = await getOpportunity(e.entity_id || e.entity?.id || 0);
+        opp.data?.organization_ids?.forEach((id) => orgIds.add(id));
+      }
     }
   }
-  const candidates = [...byEmail.values()];
-  trace(`contacts: ${candidates.length} external contact(s)`);
+  orgIds.delete(0);
+  trace(`organizations: ${orgIds.size} resolved (opportunity lookups=${oppLookups})`);
 
-  // 5) Upsert into email_threads (dedupe per owner+contact_email).
+  // 4) For each org, read interaction dates; keep those emailed within the window.
   const { data: existing } = await supabase
     .from("email_threads")
-    .select("id, contact_email, last_outbound_at");
-  const existingByEmail = new Map(
-    (existing ?? []).map((t) => [t.contact_email.toLowerCase(), t]),
+    .select("id, source_ref, last_outbound_at");
+  const byRef = new Map(
+    (existing ?? []).filter((t) => t.source_ref).map((t) => [t.source_ref as string, t]),
   );
 
   let added = 0;
   let updated = 0;
-  for (const c of candidates) {
-    const ex = existingByEmail.get(c.email);
-    const at = c.at || new Date().toISOString();
+  let skippedOld = 0;
+  let skippedNoDate = 0;
+  let processed = 0;
+  for (const orgId of orgIds) {
+    if (processed >= maxOrgs) break;
+    processed += 1;
+    const org = await getOrganization(orgId);
+    if (!org.ok || !org.data) continue;
+    const when = lastEmailDate(org.data.interaction_dates);
+    if (!when) {
+      skippedNoDate += 1;
+      continue;
+    }
+    if (Date.parse(when) < sinceMs) {
+      skippedOld += 1;
+      continue;
+    }
+    const ref = `org:${orgId}`;
+    const ex = byRef.get(ref);
     if (!ex) {
       const { error } = await supabase.from("email_threads").insert({
         owner_id: user.id,
-        contact_name: c.name,
-        contact_email: c.email,
-        last_outbound_at: at,
+        contact_name: org.data.name ?? `Org ${orgId}`,
+        contact_email: null,
+        company: org.data.name ?? null,
+        last_outbound_at: when,
         status: "no_answer",
         source: "affinity",
+        source_ref: ref,
       });
       if (!error) added += 1;
-    } else if (at > ex.last_outbound_at) {
+    } else if (when > ex.last_outbound_at) {
       const { error } = await supabase
         .from("email_threads")
-        .update({ last_outbound_at: at })
+        .update({ last_outbound_at: when })
         .eq("id", ex.id);
       if (!error) updated += 1;
     }
   }
-  trace(`upsert: added=${added} updated=${updated}`);
+  trace(
+    `upsert: added=${added} updated=${updated} skipped(old=${skippedOld}, no-date=${skippedNoDate}) processed=${processed}`,
+  );
 
   return NextResponse.json({ added, updated, debug: steps.join("\n") });
 }

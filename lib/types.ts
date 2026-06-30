@@ -23,7 +23,7 @@ export type EmailThread = {
   id: string;
   owner_id: string;
   contact_name: string;
-  contact_email: string;
+  contact_email: string | null;
   company: string | null;
   subject: string | null;
   last_outbound_at: string; // ISO
@@ -33,6 +33,7 @@ export type EmailThread = {
   snippet: string | null; // context for drafting the follow-up
   source: string; // 'manual' | 'outlook' | 'affinity'
   thread_url: string | null;
+  source_ref?: string | null;
   created_at: string;
 };
 
