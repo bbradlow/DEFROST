@@ -18,11 +18,31 @@ function daysSince(iso: string): number {
   return Number.isFinite(ms) ? Math.max(0, Math.floor(ms / 86_400_000)) : 0;
 }
 
-/** Green (just reached out) -> red (long overdue). Caps at ~21 days. */
+/** Stark scale: 0d green, 7d solid orange, 14–21d distinctly red, 30d near-black. */
 function daysColor(days: number): string {
-  const t = Math.min(days, 21) / 21; // 0..1
-  const hue = 140 - t * 140; // 140=green -> 0=red
-  return `hsl(${Math.round(hue)}, 75%, 42%)`;
+  const stops: [number, number, number, number][] = [
+    [0, 145, 65, 38], // green
+    [7, 28, 92, 48], // solid orange
+    [14, 2, 82, 46], // red
+    [21, 0, 78, 38], // deep red
+    [30, 0, 35, 12], // near black
+  ];
+  const d = Math.max(0, Math.min(days, 30));
+  let a = stops[0];
+  let b = stops[stops.length - 1];
+  for (let i = 0; i < stops.length - 1; i++) {
+    if (d >= stops[i][0] && d <= stops[i + 1][0]) {
+      a = stops[i];
+      b = stops[i + 1];
+      break;
+    }
+  }
+  const span = b[0] - a[0] || 1;
+  const t = (d - a[0]) / span;
+  const h = Math.round(a[1] + (b[1] - a[1]) * t);
+  const s = Math.round(a[2] + (b[2] - a[2]) * t);
+  const l = Math.round(a[3] + (b[3] - a[3]) * t);
+  return `hsl(${h}, ${s}%, ${l}%)`;
 }
 
 function todayInput(): string {
@@ -99,6 +119,9 @@ export function FollowUpDashboard({
   const [threads, setThreads] = useState<EmailThread[]>(initialThreads);
   const [segment, setSegment] = useState<Segment>("no_answer");
   const [staleDays, setStaleDays] = useState(0);
+  const [filterOp, setFilterOp] = useState<">=" | "<=" | "=">(">=");
+  const [sortBy, setSortBy] = useState<"oldest" | "recent" | "company_az" | "company_za">("oldest");
+  const [search, setSearch] = useState("");
   const [writerId, setWriterId] = useState<string>(writers[0]?.id ?? "");
   const [promptId, setPromptId] = useState<string>("");
   const [model, setModel] = useState("openrouter/free");
@@ -118,6 +141,10 @@ export function FollowUpDashboard({
       if (seg) setSegment(seg);
       const sd = localStorage.getItem("co:followupStaleDays");
       if (sd !== null && sd !== "") setStaleDays(Math.max(0, Number(sd) || 0));
+      const op = localStorage.getItem("co:followupOp") as ">=" | "<=" | "=" | null;
+      if (op) setFilterOp(op);
+      const sb = localStorage.getItem("co:followupSort") as typeof sortBy | null;
+      if (sb) setSortBy(sb);
       const pid = localStorage.getItem("co:followupPromptId");
       if (pid) setPromptId(pid);
     } catch {}
@@ -128,8 +155,10 @@ export function FollowUpDashboard({
     try {
       localStorage.setItem("co:followupSegment", segment);
       localStorage.setItem("co:followupStaleDays", String(staleDays));
+      localStorage.setItem("co:followupOp", filterOp);
+      localStorage.setItem("co:followupSort", sortBy);
     } catch {}
-  }, [segment, staleDays]);
+  }, [segment, staleDays, filterOp, sortBy]);
 
   const [syncing, setSyncing] = useState<null | "affinity" | "calendly">(null);
   const [syncDebug, setSyncDebug] = useState<string | null>(null);
@@ -173,7 +202,7 @@ export function FollowUpDashboard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           listId: Number(affinityListId) || 93884,
-          viewId: affinityViewId ? Number(affinityViewId) : undefined,
+          view: affinityViewId.trim() || undefined,
           sinceDays: 90,
         }),
       });
@@ -216,15 +245,45 @@ export function FollowUpDashboard({
   const visible = useMemo(() => {
     let list = threads;
     if (segment !== "all") list = list.filter((t) => t.status === segment);
-    if (segment === "no_answer" || segment === "all") {
+
+    // company / contact search
+    const q = search.trim().toLowerCase();
+    if (q) {
       list = list.filter((t) =>
-        t.status === "no_answer" ? daysSince(t.last_outbound_at) >= staleDays : true,
+        [t.company, t.contact_name, t.contact_email]
+          .filter(Boolean)
+          .some((v) => (v as string).toLowerCase().includes(q)),
       );
     }
-    return [...list].sort(
-      (a, b) => daysSince(b.last_outbound_at) - daysSince(a.last_outbound_at),
-    );
-  }, [threads, segment, staleDays]);
+
+    // day filter (applies to no-answer rows), with chosen operator
+    if (segment === "no_answer" || segment === "all") {
+      list = list.filter((t) => {
+        if (t.status !== "no_answer") return true;
+        const d = daysSince(t.last_outbound_at);
+        if (filterOp === ">=") return d >= staleDays;
+        if (filterOp === "<=") return d <= staleDays;
+        return d === staleDays;
+      });
+    }
+
+    const sorted = [...list];
+    sorted.sort((a, b) => {
+      switch (sortBy) {
+        case "recent":
+          return daysSince(a.last_outbound_at) - daysSince(b.last_outbound_at);
+        case "oldest":
+          return daysSince(b.last_outbound_at) - daysSince(a.last_outbound_at);
+        case "company_az":
+          return (a.company ?? a.contact_name).localeCompare(b.company ?? b.contact_name);
+        case "company_za":
+          return (b.company ?? b.contact_name).localeCompare(a.company ?? a.contact_name);
+        default:
+          return 0;
+      }
+    });
+    return sorted;
+  }, [threads, segment, staleDays, filterOp, sortBy, search]);
 
   async function setStatus(id: string, status: ThreadStatus) {
     const prev = threads;
@@ -348,26 +407,24 @@ export function FollowUpDashboard({
               ))}
             </select>
           </div>
-          {followupPrompts.length > 0 && (
-            <div>
-              <label className="field-label mb-1 block">Style</label>
-              <select
-                className="inp"
-                value={promptId}
-                onChange={(e) => {
-                  setPromptId(e.target.value);
-                  try { localStorage.setItem("co:followupPromptId", e.target.value); } catch {}
-                }}
-              >
-                <option value="">Default</option>
-                {followupPrompts.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          <div>
+            <label className="field-label mb-1 block">Template</label>
+            <select
+              className="inp"
+              value={promptId}
+              onChange={(e) => {
+                setPromptId(e.target.value);
+                try { localStorage.setItem("co:followupPromptId", e.target.value); } catch {}
+              }}
+            >
+              <option value="">Default</option>
+              {followupPrompts.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <button className="btn btn-ghost" onClick={() => setShowAdd((s) => !s)}>
             {showAdd ? "Close" : "+ Add thread"}
           </button>
@@ -388,7 +445,7 @@ export function FollowUpDashboard({
           <span className="inline-flex items-center gap-1 text-ink-faint">
             list
             <input
-              className="inp w-20 py-1 text-center text-xs"
+              className="inp w-14 py-1 text-center text-xs"
               value={affinityListId}
               onChange={(e) => {
                 setAffinityListId(e.target.value);
@@ -398,14 +455,14 @@ export function FollowUpDashboard({
             />
             view
             <input
-              className="inp w-20 py-1 text-center text-xs"
+              className="inp w-28 py-1 text-xs"
               value={affinityViewId}
-              placeholder="(opt)"
+              placeholder="My Deals"
               onChange={(e) => {
                 setAffinityViewId(e.target.value);
                 try { localStorage.setItem("co:affinityViewId", e.target.value); } catch {}
               }}
-              title="Optional saved-view id within the list"
+              title="Optional saved-view name or id within the list"
             />
           </span>
         )}
@@ -483,19 +540,59 @@ export function FollowUpDashboard({
       )}
 
       {/* Controls */}
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
         {segTab("all", "All", counts.all)}
         {segTab("no_answer", "No answer", counts.no_answer)}
         {segTab("answered", "Answered", counts.answered)}
         {segTab("meeting_set", "Meeting set", counts.meeting_set)}
+      </div>
+
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <input
+          className="inp w-56 py-1 text-sm"
+          placeholder="Search company or contact…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+
+        <span className="inline-flex items-center gap-1.5 text-sm text-ink-soft">
+          Sort
+          <select
+            className="inp w-36 py-1 text-sm"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+          >
+            <option value="oldest">Least recent first</option>
+            <option value="recent">Most recent first</option>
+            <option value="company_az">Company A–Z</option>
+            <option value="company_za">Company Z–A</option>
+          </select>
+        </span>
+
         {(segment === "no_answer" || segment === "all") && (
-          <span className="ml-auto inline-flex items-center gap-2 text-sm text-ink-soft">
-            No response in ≥
+          <span className="ml-auto inline-flex items-center gap-1.5 text-sm text-ink-soft">
+            No response
+            <span className="inline-flex overflow-hidden rounded border border-line">
+              {(["\u2265", "\u2264", "="] as const).map((sym, i) => {
+                const op = (["\u003e=", "\u003c=", "="] as const)[i];
+                return (
+                  <button
+                    key={op}
+                    onClick={() => setFilterOp(op)}
+                    className={`px-2 py-1 text-sm ${
+                      filterOp === op ? "bg-accent text-white" : "bg-panel text-ink-soft hover:bg-accent-soft"
+                    }`}
+                  >
+                    {sym}
+                  </button>
+                );
+              })}
+            </span>
             <input
               type="number"
               min={0}
               inputMode="numeric"
-              className="inp w-16 py-1 text-center"
+              className="inp w-12 py-1 text-center"
               value={staleDays === 0 ? "" : staleDays}
               placeholder="0"
               onChange={(e) => {

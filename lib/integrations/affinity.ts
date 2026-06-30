@@ -171,3 +171,15 @@ export function lastEmailDate(d?: Record<string, string | null>): string {
     ""
   );
 }
+
+export type AffinitySavedView = { id: number; name: string; type?: number };
+
+export async function getSavedViews(listId: number) {
+  const r = await get<{ saved_views?: AffinitySavedView[] }>(
+    `/lists/${listId}/saved-views`,
+  );
+  const views = Array.isArray(r.data)
+    ? (r.data as AffinitySavedView[])
+    : (r.data?.saved_views ?? []);
+  return { ...r, views };
+}

@@ -8,6 +8,7 @@ import {
   getSavedViewEntries,
   getOrganization,
   getOpportunity,
+  getSavedViews,
   lastEmailDate,
   type AffinityListEntry,
 } from "@/lib/integrations/affinity";
@@ -29,14 +30,14 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: { listId?: number; viewId?: number; sinceDays?: number; maxOrgs?: number };
+  let body: { listId?: number; view?: string; viewId?: number; sinceDays?: number; maxOrgs?: number };
   try {
     body = await request.json();
   } catch {
     body = {};
   }
   const listId = Number(body.listId) || DEFAULT_LIST_ID;
-  const viewId = body.viewId ? Number(body.viewId) : null;
+  const viewInput = (body.view ?? (body.viewId ? String(body.viewId) : "")).trim();
   const sinceDays = Math.max(1, Math.min(3650, body.sinceDays ?? 90));
   const maxOrgs = Math.max(1, Math.min(300, body.maxOrgs ?? 150));
   const sinceMs = Date.now() - sinceDays * 86_400_000;
@@ -59,6 +60,30 @@ export async function POST(request: Request) {
   trace(
     `whoami: ok tenant="${who.data.tenant?.name ?? "?"}" as ${whoamiEmail(who.data) || user.email}`,
   );
+
+  // Resolve a saved view (accepts a name or a numeric id).
+  let viewId: number | null = null;
+  if (viewInput) {
+    if (/^\d+$/.test(viewInput)) {
+      viewId = Number(viewInput);
+    } else {
+      const sv = await getSavedViews(listId);
+      const match = sv.views.find(
+        (v) => v.name.toLowerCase() === viewInput.toLowerCase(),
+      );
+      viewId = match?.id ?? null;
+      trace(
+        `saved-view: "${viewInput}" -> ${viewId ?? "NOT FOUND"} ` +
+          `(available: ${sv.views.map((v) => v.name).join(", ") || "none"})`,
+      );
+      if (!viewId) {
+        return NextResponse.json(
+          { error: `Saved view "${viewInput}" not found in list ${listId}.`, debug: steps.join("\n") },
+          { status: 404 },
+        );
+      }
+    }
+  }
 
   // 2) Pull the pipeline entries (list or saved view), paginating a few pages.
   let entries: AffinityListEntry[] = [];
