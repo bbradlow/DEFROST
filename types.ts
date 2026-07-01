@@ -14,7 +14,6 @@ export type StylePrompt = {
   owner_id: string;
   name: string;
   body: string;
-  kind: "outreach" | "followup";
   created_at: string;
 };
 
@@ -24,10 +23,9 @@ export type EmailThread = {
   id: string;
   owner_id: string;
   contact_name: string;
-  contact_email: string | null;
+  contact_email: string;
   company: string | null;
   subject: string | null;
-  remind_at?: string | null;
   last_outbound_at: string; // ISO
   last_inbound_at: string | null;
   meeting_at: string | null;
@@ -35,7 +33,6 @@ export type EmailThread = {
   snippet: string | null; // context for drafting the follow-up
   source: string; // 'manual' | 'outlook' | 'affinity'
   thread_url: string | null;
-  source_ref?: string | null;
   created_at: string;
 };
 

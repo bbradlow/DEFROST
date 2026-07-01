@@ -147,6 +147,66 @@ Only include real, verifiable people. If you cannot verify someone, include fewe
   ];
 }
 
+/**
+ * Build messages for a short, polite follow-up to a prospect who hasn't
+ * replied. Written in the writer's voice, optionally including their Calendly.
+ */
+export function buildFollowupMessages(args: {
+  writer: Writer;
+  contactName: string;
+  company?: string | null;
+  subject?: string | null;
+  daysSince: number;
+  snippet?: string | null;
+  extraInstructions?: string | null;
+}) {
+  const { writer, contactName, company, subject, daysSince, snippet, extraInstructions } = args;
+
+  const lines = [
+    "You are writing a brief, polite follow-up email to a prospect who has not replied to an earlier outreach email.",
+    "Rules:",
+    "- Keep it short: 2–4 sentences. Warm, low-pressure, never pushy or guilt-tripping.",
+    "- Do NOT reintroduce yourself at length; this is a nudge, not a new pitch.",
+    "- Add one small new reason to reply or a gentle, specific prompt.",
+    "- Do not over-apologize for following up.",
+    "- Body only — no subject line.",
+    "",
+    "Write as this sender and sign off as them:",
+    `- Name: ${clean(writer.name)}`,
+  ];
+  if (clean(writer.title)) lines.push(`- Title: ${clean(writer.title)}`);
+  if (clean(writer.signature)) {
+    lines.push("- Use this exact signature block at the very end, verbatim:", clean(writer.signature));
+  } else {
+    lines.push(`- Close with a short sign-off followed by "${clean(writer.name)}".`);
+  }
+  if (clean(writer.calendly)) {
+    const url = ensureScheme(clean(writer.calendly));
+    lines.push(`- Offer to book time, written as a clickable link: my Calendly (${url}). Use this URL verbatim.`);
+  }
+
+  if (clean(extraInstructions)) {
+    lines.push("", "Additional style guidance for this follow-up:", clean(extraInstructions));
+  }
+
+  const ctx = [
+    `Contact: ${clean(contactName)}${clean(company) ? ` at ${clean(company)}` : ""}`,
+    clean(subject) ? `Original subject: ${clean(subject)}` : "",
+    `Days since my last email: ${daysSince}`,
+    "They have not replied.",
+    clean(snippet) ? `What the original was about / notes: ${clean(snippet)}` : "",
+    "",
+    "Write the follow-up email body now.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return [
+    { role: "system" as const, content: lines.join("\n") },
+    { role: "user" as const, content: ctx },
+  ];
+}
+
 export function buildFounderExtractionMessages(
   company: string,
   siteText: string,
@@ -172,4 +232,32 @@ ${siteText.slice(0, 8000)}
     { role: "system" as const, content: system },
     { role: "user" as const, content: user },
   ];
+}
+
+// ---- Built-in "just fill in the blanks" follow-up template --------------------
+// A fixed, deterministic follow-up: no Calendly link, no model embellishment.
+// Selected via the Template dropdown; handled directly (no LLM call).
+export const FILL_BLANKS_TEMPLATE_ID = "__fillblanks__";
+
+export const FILL_BLANKS_TEMPLATE = `Hi {Recipient},
+
+Just wanted to follow up here, please let me know if you have the time to chat in the coming weeks!
+
+Best,
+{Writer}`;
+
+/** Turn "Alice Smith, Bob Jones" into "Alice and Bob" for the greeting. */
+export function recipientFirstNames(contactName: string): string {
+  const firsts = (contactName ?? "")
+    .split(",")
+    .map((s) => s.trim().split(/\s+/)[0])
+    .filter(Boolean);
+  if (firsts.length === 0) return (contactName ?? "").trim();
+  if (firsts.length === 1) return firsts[0];
+  if (firsts.length === 2) return `${firsts[0]} and ${firsts[1]}`;
+  return `${firsts.slice(0, -1).join(", ")}, and ${firsts[firsts.length - 1]}`;
+}
+
+export function fillBlanks(recipient: string, writer: string): string {
+  return FILL_BLANKS_TEMPLATE.replace(/\{Recipient\}/g, recipient).replace(/\{Writer\}/g, writer);
 }

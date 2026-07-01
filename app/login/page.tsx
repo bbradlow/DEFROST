@@ -70,8 +70,10 @@ function LoginForm() {
           <h1 className="text-2xl font-semibold tracking-tight text-ink">
             DEFROST
           </h1>
-          <p className="mt-1 text-sm text-ink-faint">
-            Delivering Emails to Founders Really Often, Somewhat Targetedly.
+          <p className="mt-2 text-sm text-ink-soft">
+            Draft personalized cold outreach in your team&apos;s voice, then keep
+            track of who hasn&apos;t replied. DEFROST syncs the emails you&apos;ve
+            sent, flags the ones going cold, and drafts the follow-up for you.
           </p>
         </div>
 
@@ -141,7 +143,7 @@ function LoginForm() {
 
         <p className="mt-4 text-center text-xs text-ink-faint">
           The signed-in user is the <strong>owner</strong>. Writers (senders)
-          are managed inside the app. Made by <strong>Ben Bradlow</strong> 06102026.
+          are managed inside the app.
         </p>
       </div>
     </main>
