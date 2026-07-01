@@ -162,6 +162,14 @@ export function FollowUpDashboard({
 
   const [syncing, setSyncing] = useState<null | "affinity" | "calendly">(null);
   const [syncDebug, setSyncDebug] = useState<string | null>(null);
+  const [affinityDays, setAffinityDays] = useState(30);
+
+  useEffect(() => {
+    try {
+      const d = localStorage.getItem("co:affinityDays");
+      if (d) setAffinityDays(Math.max(1, Number(d) || 30));
+    } catch {}
+  }, []);
 
   // Surface the result of the Calendly OAuth redirect (?calendly=connected|error).
   useEffect(() => {
@@ -189,7 +197,7 @@ export function FollowUpDashboard({
       const res = await fetch("/api/affinity/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sinceDays: 90 }),
+        body: JSON.stringify({ sinceDays: affinityDays }),
       });
       const data = await res.json();
       if (data.debug) setSyncDebug(data.debug);
@@ -432,6 +440,24 @@ export function FollowUpDashboard({
           >
             {syncing === "affinity" ? "Syncing Affinity…" : "Sync from Affinity"}
           </button>
+          {affinityReady && (
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-line bg-paper px-2 py-1 text-[11px] text-ink-faint">
+              <span>last</span>
+              <input
+                type="number"
+                min={1}
+                className="inp h-6 w-12 px-1 py-0 text-center text-[11px]"
+                value={affinityDays}
+                onChange={(e) => {
+                  const n = Math.max(1, Math.floor(Number(e.target.value) || 1));
+                  setAffinityDays(n);
+                  try { localStorage.setItem("co:affinityDays", String(n)); } catch {}
+                }}
+                title="How many days back to scan. Shorter = fuller coverage on a high-volume firm feed."
+              />
+              <span>days</span>
+            </span>
+          )}
         </div>
 
         <span className="h-5 w-px bg-line" aria-hidden />

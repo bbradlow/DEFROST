@@ -34,7 +34,7 @@ export async function POST(request: Request) {
   } catch {
     body = {};
   }
-  const sinceDays = Math.max(1, Math.min(3650, body.sinceDays ?? 90));
+  const sinceDays = Math.max(1, Math.min(3650, body.sinceDays ?? 30));
   const sinceISO = daysAgoISO(sinceDays);
 
   const steps: string[] = [];
@@ -80,36 +80,44 @@ export async function POST(request: Request) {
     `emails: ${feed.emails.length} since ${sinceISO.slice(0, 10)} ` +
       `across ${feed.pages} page(s) [filter="${feed.filter}"]`,
   );
-  if (feed.pages >= 30) {
+  if (feed.moreAvailable || feed.timedOut) {
     trace(
-      `note: hit the ${feed.pages}-page cap — there are more emails in this window than were ` +
-        `pulled. The /emails feed can't filter by sender, so older/extra emails may be truncated.`,
+      `note: did NOT reach the end of the window (${feed.timedOut ? "time budget" : "page cap"} hit). ` +
+        `The firm-wide feed has more emails than were pulled, and /emails can't filter by sender — ` +
+        `try a shorter window (lower the days box) to fully cover recent mail.`,
     );
   }
 
-  // Decisive breakdown: how many are sent vs received, and what the senders look like.
+  // Decisive breakdown: direction split, date range covered, and whether *my*
+  // address appears as a sender anywhere in what we pulled.
   {
     let nSent = 0;
     let nRecv = 0;
-    let nOther = 0;
+    let minSent = "";
+    let maxSent = "";
+    let meAsSender = 0;
+    const internalSenders = new Set<string>();
     const sentFrom = new Set<string>();
-    const recvFrom = new Set<string>();
     for (const e of feed.emails) {
       const dir = (e.direction ?? "").toLowerCase();
       const fromAddr = (e.from?.emailAddress ?? e.from?.person?.primaryEmailAddress ?? "").toLowerCase();
+      if (e.sentAt) {
+        if (!minSent || e.sentAt < minSent) minSent = e.sentAt;
+        if (!maxSent || e.sentAt > maxSent) maxSent = e.sentAt;
+      }
+      if (fromAddr === meEmail) meAsSender += 1;
       if (dir === "sent") {
         nSent += 1;
-        if (sentFrom.size < 6 && fromAddr) sentFrom.add(fromAddr);
-      } else if (dir === "received") {
-        nRecv += 1;
-        if (recvFrom.size < 4 && fromAddr) recvFrom.add(fromAddr);
+        if (fromAddr) internalSenders.add(fromAddr);
+        if (sentFrom.size < 8 && fromAddr) sentFrom.add(fromAddr);
       } else {
-        nOther += 1;
+        nRecv += 1;
       }
     }
-    trace(`feed breakdown: sent=${nSent} received=${nRecv} other=${nOther}; matching against me=${meEmail}`);
-    trace(`sample 'sent' from-addresses: ${[...sentFrom].join(", ") || "(none)"}`);
-    trace(`sample 'received' from-addresses: ${[...recvFrom].join(", ") || "(none)"}`);
+    trace(`feed breakdown: sent=${nSent} received=${nRecv}; matching me=${meEmail}`);
+    trace(`date range pulled: ${minSent.slice(0, 10) || "?"} … ${maxSent.slice(0, 10) || "?"}`);
+    trace(`distinct internal senders seen: ${internalSenders.size}; my address as sender: ${meAsSender} time(s)`);
+    trace(`sample 'sent' senders: ${[...sentFrom].join(", ") || "(none)"}`);
   }
 
   // 3) Aggregate per external contact: my last outbound + their last reply.
