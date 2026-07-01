@@ -123,6 +123,7 @@ export function FollowUpDashboard({
   const [filterOp, setFilterOp] = useState<">=" | "<=" | "=">(">=");
   const [sortBy, setSortBy] = useState<"oldest" | "recent" | "company_az" | "company_za">("recent");
   const [search, setSearch] = useState("");
+  const [subjectFilter, setSubjectFilter] = useState("");
   const [writerId, setWriterId] = useState<string>(writers[0]?.id ?? "");
   const [promptId, setPromptId] = useState<string>("");
   const [model, setModel] = useState("openrouter/free");
@@ -146,6 +147,8 @@ export function FollowUpDashboard({
       if (op) setFilterOp(op);
       const sb = localStorage.getItem("co:followupSort") as typeof sortBy | null;
       if (sb) setSortBy(sb);
+      const subj = localStorage.getItem("co:followupSubject");
+      if (subj) setSubjectFilter(subj);
       const pid = localStorage.getItem("co:followupPromptId");
       if (pid) setPromptId(pid);
     } catch {}
@@ -250,6 +253,11 @@ export function FollowUpDashboard({
       );
     }
 
+    // subject filter (autofilled from synced emails)
+    if (subjectFilter) {
+      list = list.filter((t) => (t.subject ?? "") === subjectFilter);
+    }
+
     // day filter (applies to no-answer rows), with chosen operator
     if (segment === "no_answer" || segment === "all") {
       list = list.filter((t) => {
@@ -277,7 +285,24 @@ export function FollowUpDashboard({
       }
     });
     return sorted;
-  }, [threads, segment, staleDays, filterOp, sortBy, search]);
+  }, [threads, segment, staleDays, filterOp, sortBy, search, subjectFilter]);
+
+  // Distinct subjects present in synced threads, to populate the subject filter.
+  const subjectOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of threads) {
+      const s = (t.subject ?? "").trim();
+      if (s) set.add(s);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [threads]);
+
+  useEffect(() => {
+    if (subjectFilter && !subjectOptions.includes(subjectFilter)) {
+      setSubjectFilter("");
+      try { localStorage.removeItem("co:followupSubject"); } catch {}
+    }
+  }, [subjectOptions, subjectFilter]);
 
   async function setStatus(id: string, status: ThreadStatus) {
     const prev = threads;
@@ -594,6 +619,27 @@ export function FollowUpDashboard({
             <option value="oldest">Least recent first</option>
             <option value="company_az">Company A–Z</option>
             <option value="company_za">Company Z–A</option>
+          </select>
+        </label>
+
+        <label className="inline-flex items-center gap-2 text-sm text-ink-soft">
+          <span className="text-ink-faint">Subject</span>
+          <select
+            className="inp h-9 w-52 text-sm"
+            value={subjectFilter}
+            onChange={(e) => {
+              setSubjectFilter(e.target.value);
+              try { localStorage.setItem("co:followupSubject", e.target.value); } catch {}
+            }}
+            disabled={subjectOptions.length === 0}
+            title={subjectOptions.length === 0 ? "Sync from Affinity to populate subjects" : "Filter by email subject"}
+          >
+            <option value="">All subjects{subjectOptions.length ? ` (${subjectOptions.length})` : ""}</option>
+            {subjectOptions.map((s) => (
+              <option key={s} value={s}>
+                {s.length > 60 ? s.slice(0, 57) + "…" : s}
+              </option>
+            ))}
           </select>
         </label>
 
