@@ -121,19 +121,22 @@ export async function POST(request: Request) {
   }
 
   // 3) Aggregate per external contact: my last outbound + their last reply.
-  type Agg = { name: string; email: string; lastOut: string | null; lastIn: string | null };
+  type Agg = { name: string; email: string; lastOut: string | null; lastIn: string | null; subject: string | null };
   const byContact = new Map<string, Agg>();
   const isMe = (a: Attendee) =>
     (a.emailAddress ?? "").toLowerCase() === meEmail ||
     (a.person?.primaryEmailAddress ?? "").toLowerCase() === meEmail;
   const isInternal = (a: Attendee) => a.person?.type === "internal";
 
-  const upsertAgg = (a: Attendee, when: string, dir: "out" | "in") => {
+  const upsertAgg = (a: Attendee, when: string, dir: "out" | "in", subject?: string | null) => {
     const email = (a.emailAddress ?? a.person?.primaryEmailAddress ?? "").toLowerCase();
     if (!email) return;
     const cur =
-      byContact.get(email) ?? { name: attendeeName(a), email, lastOut: null, lastIn: null };
-    if (dir === "out" && (!cur.lastOut || when > cur.lastOut)) cur.lastOut = when;
+      byContact.get(email) ?? { name: attendeeName(a), email, lastOut: null, lastIn: null, subject: null };
+    if (dir === "out" && (!cur.lastOut || when > cur.lastOut)) {
+      cur.lastOut = when;
+      cur.subject = subject ?? cur.subject; // subject of my most recent outbound
+    }
     if (dir === "in" && (!cur.lastIn || when > cur.lastIn)) cur.lastIn = when;
     if (cur.name === email && attendeeName(a) !== email) cur.name = attendeeName(a);
     byContact.set(email, cur);
@@ -148,7 +151,7 @@ export async function POST(request: Request) {
       myOutbound += 1;
       for (const to of [...e.toParticipantsPreview.data, ...e.ccParticipantsPreview.data]) {
         if (isMe(to) || isInternal(to)) continue; // skip myself + teammates
-        upsertAgg(to, e.sentAt, "out");
+        upsertAgg(to, e.sentAt, "out", e.subject);
       }
     } else {
       // received: from = external contact, to = internal (possibly me)
@@ -184,6 +187,7 @@ export async function POST(request: Request) {
         owner_id: user.id,
         contact_name: c.name,
         contact_email: c.email,
+        subject: c.subject,
         last_outbound_at: c.lastOut,
         last_inbound_at: c.lastIn,
         status,
@@ -200,6 +204,7 @@ export async function POST(request: Request) {
           last_outbound_at: c.lastOut,
           last_inbound_at: c.lastIn,
           status: newStatus,
+          ...(c.subject ? { subject: c.subject } : {}),
         })
         .eq("id", ex.id);
       if (!error) updated += 1;

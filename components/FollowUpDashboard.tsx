@@ -117,6 +117,7 @@ export function FollowUpDashboard({
 }) {
   const supabase = createClient();
   const [threads, setThreads] = useState<EmailThread[]>(initialThreads);
+  const [deletingAll, setDeletingAll] = useState(false);
   const [segment, setSegment] = useState<Segment>("no_answer");
   const [staleDays, setStaleDays] = useState(0);
   const [filterOp, setFilterOp] = useState<">=" | "<=" | "=">(">=");
@@ -162,12 +163,12 @@ export function FollowUpDashboard({
 
   const [syncing, setSyncing] = useState<null | "affinity" | "calendly">(null);
   const [syncDebug, setSyncDebug] = useState<string | null>(null);
-  const [affinityDays, setAffinityDays] = useState(30);
+  const [affinityDays, setAffinityDays] = useState("30");
 
   useEffect(() => {
     try {
       const d = localStorage.getItem("co:affinityDays");
-      if (d) setAffinityDays(Math.max(1, Number(d) || 30));
+      if (d) setAffinityDays(d);
     } catch {}
   }, []);
 
@@ -197,7 +198,7 @@ export function FollowUpDashboard({
       const res = await fetch("/api/affinity/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sinceDays: affinityDays }),
+        body: JSON.stringify({ sinceDays: Math.max(1, Math.floor(Number(affinityDays) || 30)) }),
       });
       const data = await res.json();
       if (data.debug) setSyncDebug(data.debug);
@@ -302,6 +303,31 @@ export function FollowUpDashboard({
     }
   }
 
+  async function deleteAll() {
+    if (threads.length === 0) return;
+    if (
+      !confirm(
+        `Delete all ${threads.length} follow-up reminder${threads.length === 1 ? "" : "s"}? This cannot be undone.`,
+      )
+    )
+      return;
+    setDeletingAll(true);
+    setBanner(null);
+    const prev = threads;
+    setThreads([]);
+    const { data: auth } = await supabase.auth.getUser();
+    const ownerId = auth.user?.id;
+    const { error } = await supabase
+      .from("email_threads")
+      .delete()
+      .eq("owner_id", ownerId ?? "");
+    if (error) {
+      setThreads(prev);
+      setBanner(error.message);
+    }
+    setDeletingAll(false);
+  }
+
   async function draft(id: string) {
     if (!writerId) {
       setBanner("Pick a writer to draft as (top right).");
@@ -382,7 +408,7 @@ export function FollowUpDashboard({
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="eyebrow mb-1">Pipeline</p>
-          <h1 className="text-2xl font-semibold tracking-tight">Follow-Up</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Follow-up reminders</h1>
         </div>
         <div className="flex items-end gap-2">
           <div>
@@ -421,6 +447,14 @@ export function FollowUpDashboard({
           <button className="btn btn-ghost" onClick={() => setShowAdd((s) => !s)}>
             {showAdd ? "Close" : "+ Add thread"}
           </button>
+          <button
+            className="btn btn-danger"
+            disabled={threads.length === 0 || deletingAll}
+            onClick={deleteAll}
+            title="Delete every follow-up reminder"
+          >
+            {deletingAll ? "Deleting…" : "Delete all"}
+          </button>
         </div>
       </div>
 
@@ -449,9 +483,8 @@ export function FollowUpDashboard({
                 className="inp h-6 w-12 px-1 py-0 text-center text-[11px]"
                 value={affinityDays}
                 onChange={(e) => {
-                  const n = Math.max(1, Math.floor(Number(e.target.value) || 1));
-                  setAffinityDays(n);
-                  try { localStorage.setItem("co:affinityDays", String(n)); } catch {}
+                  setAffinityDays(e.target.value);
+                  try { localStorage.setItem("co:affinityDays", e.target.value); } catch {}
                 }}
                 title="How many days back to scan. Shorter = fuller coverage on a high-volume firm feed."
               />
@@ -624,10 +657,11 @@ export function FollowUpDashboard({
                         <span className="font-normal text-ink-faint"> · {t.contact_email}</span>
                       )}
                     </p>
-                    <p className="text-sm text-ink-soft">
-                      {t.company ? `${t.company} — ` : ""}
-                      {t.subject || <span className="text-ink-faint">(no subject)</span>}
-                    </p>
+                    {(t.company || t.subject) && (
+                      <p className="text-sm text-ink-soft">
+                        {[t.company, t.subject].filter(Boolean).join(" — ")}
+                      </p>
+                    )}
                     <p className="mt-0.5 text-xs text-ink-faint">
                       {t.last_inbound_at ? "Replied" : "Awaiting reply"}
                       {t.meeting_at ? " · meeting on file" : ""}
