@@ -3,8 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { linkifyToHtml, linkifyToPlain } from "@/lib/linkify";
-import type { EmailThread, StylePrompt, ThreadStatus, Writer } from "@/lib/types";
-import { FILL_BLANKS_TEMPLATE_ID } from "@/lib/prompts";
+import type { EmailThread, ThreadStatus, Writer } from "@/lib/types";
 
 type Segment = "all" | ThreadStatus;
 
@@ -44,6 +43,90 @@ function daysColor(days: number): string {
   const s = Math.round(a[2] + (b[2] - a[2]) * t);
   const l = Math.round(a[3] + (b[3] - a[3]) * t);
   return `hsl(${h}, ${s}%, ${l}%)`;
+}
+
+/** Countdown urgency: far away = green, approaching/overdue = red. */
+function countdownColor(msRemaining: number): string {
+  if (msRemaining <= 0) return "hsl(0, 78%, 38%)"; // overdue: deep red
+  const days = Math.min(msRemaining / 86_400_000, 14);
+  const t = days / 14; // 0 (now) → 1 (far)
+  const h = Math.round(t * 145); // 0 red → 145 green
+  const s = Math.round(78 - t * 13);
+  return `hsl(${h}, ${s}%, 44%)`;
+}
+
+/** "in 3d 5h" when far, "H:MM:SS" within a day, "overdue 2d" past due. */
+function formatCountdown(target: number, now: number): string {
+  let ms = target - now;
+  const overdue = ms < 0;
+  ms = Math.abs(ms);
+  const d = Math.floor(ms / 86_400_000);
+  const h = Math.floor((ms % 86_400_000) / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  if (overdue) {
+    if (d >= 1) return `overdue ${d}d`;
+    if (h >= 1) return `overdue ${h}h`;
+    return `overdue ${m}m`;
+  }
+  if (d >= 1) return `in ${d}d ${h}h`;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${h}:${pad(m)}:${pad(s)}`;
+}
+
+function icsEscape(v: string): string {
+  return v.replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\n/g, "\\n");
+}
+function icsStamp(d: Date): string {
+  return d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+}
+function downloadReminderICS(t: EmailThread): void {
+  // Event time: the reminder's remind_at, else a sensible default (3 days out, 9am).
+  let start: Date;
+  if (t.remind_at) {
+    start = new Date(t.remind_at);
+  } else {
+    start = new Date();
+    start.setDate(start.getDate() + 3);
+    start.setHours(9, 0, 0, 0);
+  }
+  const end = new Date(start.getTime() + 30 * 60_000);
+  const title = `Follow up: ${t.contact_name}${t.company ? ` (${t.company})` : ""}`;
+  const descParts = [
+    t.subject ? `Re: ${t.subject}` : "",
+    t.contact_email || "",
+    "Reminder created by DEFROST",
+  ].filter(Boolean);
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//DEFROST//Follow-up//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${t.id}-${Date.now()}@defrost`,
+    `DTSTAMP:${icsStamp(new Date())}`,
+    `DTSTART:${icsStamp(start)}`,
+    `DTEND:${icsStamp(end)}`,
+    `SUMMARY:${icsEscape(title)}`,
+    `DESCRIPTION:${icsEscape(descParts.join("\n"))}`,
+    "BEGIN:VALARM",
+    "TRIGGER:-PT0M",
+    "ACTION:DISPLAY",
+    "DESCRIPTION:Follow-up reminder",
+    "END:VALARM",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ];
+  const blob = new Blob([lines.join("\r\n")], { type: "text/calendar;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `followup-${(t.contact_name || "reminder").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function todayInput(): string {
@@ -99,24 +182,19 @@ const emptyAdd = {
   last_outbound_at: todayInput(),
   status: "no_answer" as ThreadStatus,
   snippet: "",
+  remind_at: "",
 };
 
 export function FollowUpDashboard({
   initialThreads,
   writers,
-  followupPrompts,
   ownerEmail,
   affinityReady,
-  calendlyReady,
-  calendlyConnected,
 }: {
   initialThreads: EmailThread[];
   writers: Writer[];
-  followupPrompts: StylePrompt[];
   ownerEmail: string;
   affinityReady: boolean;
-  calendlyReady: boolean;
-  calendlyConnected: boolean;
 }) {
   const supabase = createClient();
   const [threads, setThreads] = useState<EmailThread[]>(initialThreads);
@@ -128,20 +206,23 @@ export function FollowUpDashboard({
   const [search, setSearch] = useState("");
   const [subjectFilter, setSubjectFilter] = useState("");
   const [writerId, setWriterId] = useState<string>(writers[0]?.id ?? "");
-  const [promptId, setPromptId] = useState<string>("");
-  const [model, setModel] = useState("openrouter/free");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [draftingId, setDraftingId] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   const [showAdd, setShowAdd] = useState(false);
   const [add, setAdd] = useState({ ...emptyAdd });
   const [saving, setSaving] = useState(false);
 
+  // Live tick so countdown reminders update in place.
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   useEffect(() => {
     try {
-      const dm = localStorage.getItem("co:defaultModel");
-      if (dm) setModel(dm);
       const seg = localStorage.getItem("co:followupSegment") as Segment | null;
       if (seg) setSegment(seg);
       const sd = localStorage.getItem("co:followupStaleDays");
@@ -152,8 +233,6 @@ export function FollowUpDashboard({
       if (sb) setSortBy(sb);
       const subj = localStorage.getItem("co:followupSubject");
       if (subj) setSubjectFilter(subj);
-      const pid = localStorage.getItem("co:followupPromptId");
-      if (pid) setPromptId(pid);
     } catch {}
   }, []);
 
@@ -167,7 +246,7 @@ export function FollowUpDashboard({
     } catch {}
   }, [segment, staleDays, filterOp, sortBy]);
 
-  const [syncing, setSyncing] = useState<null | "affinity" | "calendly">(null);
+  const [syncing, setSyncing] = useState<null | "affinity">(null);
   const [syncDebug, setSyncDebug] = useState<string | null>(null);
   const [affinityDays, setAffinityDays] = useState("30");
   const [fromEmail, setFromEmail] = useState("");
@@ -179,16 +258,6 @@ export function FollowUpDashboard({
       const f = localStorage.getItem("co:affinityFrom");
       if (f) setFromEmail(f);
     } catch {}
-  }, []);
-
-  // Surface the result of the Calendly OAuth redirect (?calendly=connected|error).
-  useEffect(() => {
-    const p = new URLSearchParams(window.location.search).get("calendly");
-    if (!p) return;
-    if (p === "connected") setBanner("Calendly connected.");
-    else if (p === "notconfigured") setBanner("Calendly isn't configured on the server yet.");
-    else if (p === "error") setBanner("Calendly connection failed — try again.");
-    window.history.replaceState({}, "", "/follow-up");
   }, []);
 
   async function refreshThreads() {
@@ -219,24 +288,6 @@ export function FollowUpDashboard({
       setBanner(`Affinity: added ${data.added ?? 0}, updated ${data.updated ?? 0}.`);
     } catch (e) {
       setBanner(e instanceof Error ? e.message : "Affinity sync failed");
-    } finally {
-      setSyncing(null);
-    }
-  }
-
-  async function syncCalendly() {
-    setSyncing("calendly");
-    setBanner(null);
-    setSyncDebug(null);
-    try {
-      const res = await fetch("/api/calendly/sync", { method: "POST" });
-      const data = await res.json();
-      if (data.debug) setSyncDebug(data.debug);
-      if (!res.ok) throw new Error(data.error ?? "Calendly sync failed");
-      await refreshThreads();
-      setBanner(`Calendly: ${data.matched ?? 0} meeting(s) matched across ${data.events ?? 0} event(s).`);
-    } catch (e) {
-      setBanner(e instanceof Error ? e.message : "Calendly sync failed");
     } finally {
       setSyncing(null);
     }
@@ -372,7 +423,7 @@ export function FollowUpDashboard({
       const res = await fetch("/api/followup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threadId: id, writerId, model, promptId: promptId || undefined }),
+        body: JSON.stringify({ threadId: id, writerId }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Drafting failed");
@@ -404,6 +455,7 @@ export function FollowUpDashboard({
         last_outbound_at: new Date(add.last_outbound_at || todayInput()).toISOString(),
         status: add.status,
         snippet: add.snippet.trim() || null,
+        remind_at: add.remind_at ? new Date(add.remind_at).toISOString() : null,
         source: "manual",
       };
       const { data, error } = await supabase
@@ -457,25 +509,6 @@ export function FollowUpDashboard({
               {writers.map((w) => (
                 <option key={w.id} value={w.id}>
                   {w.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="field-label mb-1 block">Template</label>
-            <select
-              className="inp"
-              value={promptId}
-              onChange={(e) => {
-                setPromptId(e.target.value);
-                try { localStorage.setItem("co:followupPromptId", e.target.value); } catch {}
-              }}
-            >
-              <option value="">Default</option>
-              <option value={FILL_BLANKS_TEMPLATE_ID}>Just fill in the blanks</option>
-              {followupPrompts.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
                 </option>
               ))}
             </select>
@@ -546,26 +579,6 @@ export function FollowUpDashboard({
           </span>
         )}
 
-        <span className="h-5 w-px bg-line" aria-hidden />
-
-        {/* Calendly */}
-        {!calendlyReady ? (
-          <span className="text-xs text-ink-faint">Calendly: not configured</span>
-        ) : calendlyConnected ? (
-          <button
-            className="btn btn-ghost py-1 text-xs"
-            disabled={syncing !== null}
-            onClick={syncCalendly}
-            title="Match scheduled meetings to your reminders"
-          >
-            {syncing === "calendly" ? "Syncing Calendly…" : "Sync meetings (Calendly)"}
-          </button>
-        ) : (
-          <a className="btn btn-ghost py-1 text-xs" href="/api/calendly/connect">
-            Connect Calendly
-          </a>
-        )}
-
         {!affinityReady && (
           <span className="text-xs text-ink-faint">Affinity: set AFFINITY_API_KEY to enable.</span>
         )}
@@ -606,6 +619,13 @@ export function FollowUpDashboard({
               <option value="answered">Answered</option>
               <option value="meeting_set">Meeting set</option>
             </select>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="field-label mb-1 block">
+              Remind at <span className="text-ink-faint">(optional — shows a countdown instead of days-since)</span>
+            </label>
+            <input type="datetime-local" className="inp" value={add.remind_at}
+              onChange={(e) => setAdd({ ...add, remind_at: e.target.value })} />
           </div>
           <textarea className="inp sm:col-span-2 h-20 resize-y"
             placeholder="What the original email was about (used to draft the follow-up)"
@@ -747,13 +767,23 @@ export function FollowUpDashboard({
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <span
-                      className="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold text-white"
-                      style={{ backgroundColor: daysColor(d) }}
-                      title={`Last emailed ${d} day${d === 1 ? "" : "s"} ago`}
-                    >
-                      {d}d{t.status === "no_answer" ? " · no reply" : ""}
-                    </span>
+                    {t.remind_at ? (
+                      <span
+                        className="inline-flex items-center rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold text-white"
+                        style={{ backgroundColor: countdownColor(Date.parse(t.remind_at) - now) }}
+                        title={`Reminder: ${new Date(t.remind_at).toLocaleString()}`}
+                      >
+                        {formatCountdown(Date.parse(t.remind_at), now)}
+                      </span>
+                    ) : (
+                      <span
+                        className="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold text-white"
+                        style={{ backgroundColor: daysColor(d) }}
+                        title={`Last emailed ${d} day${d === 1 ? "" : "s"} ago`}
+                      >
+                        {d}d{t.status === "no_answer" ? " · no reply" : ""}
+                      </span>
+                    )}
                     <span className={`inline-flex items-center gap-1.5 font-mono text-[11px] ${meta.text}`}>
                       <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} aria-hidden />
                       {meta.label}
@@ -768,6 +798,13 @@ export function FollowUpDashboard({
                     onClick={() => draft(t.id)}
                   >
                     {draftingId === t.id ? "Drafting…" : "Draft follow-up"}
+                  </button>
+                  <button
+                    className="btn btn-ghost py-1 text-xs"
+                    onClick={() => downloadReminderICS(t)}
+                    title={t.remind_at ? "Add this reminder to your calendar" : "Add to calendar (defaults to 3 days out, 9am — set 'Remind at' for a specific time)"}
+                  >
+                    Add to calendar
                   </button>
                   {t.status !== "answered" && (
                     <button className="btn btn-ghost py-1 text-xs" onClick={() => setStatus(t.id, "answered")}>

@@ -99,6 +99,7 @@ create table if not exists public.email_threads (
   contact_email     text,
   company           text,
   subject           text,
+  remind_at         timestamptz,
   last_outbound_at  timestamptz not null default now(),
   last_inbound_at   timestamptz,
   meeting_at        timestamptz,

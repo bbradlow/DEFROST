@@ -27,6 +27,7 @@ export type EmailThread = {
   contact_email: string | null;
   company: string | null;
   subject: string | null;
+  remind_at?: string | null;
   last_outbound_at: string; // ISO
   last_inbound_at: string | null;
   meeting_at: string | null;
