@@ -268,6 +268,13 @@ export function FollowUpDashboard({
     if (data) setThreads(data as EmailThread[]);
   }
 
+  // Re-pull from the DB whenever this view mounts (e.g. returning from another
+  // tab), so synced reminders don't vanish behind a stale cached server render.
+  useEffect(() => {
+    refreshThreads();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function syncAffinity() {
     setSyncing("affinity");
     setBanner(null);

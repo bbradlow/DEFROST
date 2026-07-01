@@ -5,6 +5,10 @@ import { FollowUpDashboard } from "@/components/FollowUpDashboard";
 import { affinityConfigured } from "@/lib/integrations/affinity";
 import type { EmailThread, Writer } from "@/lib/types";
 
+// Always render fresh from the DB (never a cached/stale render), so reminders
+// persist correctly across client-side navigation.
+export const dynamic = "force-dynamic";
+
 export default async function FollowUpPage() {
   const supabase = await createClient();
   const {
