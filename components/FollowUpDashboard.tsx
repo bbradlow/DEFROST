@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { linkifyToHtml, linkifyToPlain } from "@/lib/linkify";
 import type { EmailThread, StylePrompt, ThreadStatus, Writer } from "@/lib/types";
+import { FILL_BLANKS_TEMPLATE_ID } from "@/lib/prompts";
 
 type Segment = "all" | ThreadStatus;
 
@@ -471,6 +472,7 @@ export function FollowUpDashboard({
               }}
             >
               <option value="">Default</option>
+              <option value={FILL_BLANKS_TEMPLATE_ID}>Just fill in the blanks</option>
               {followupPrompts.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}

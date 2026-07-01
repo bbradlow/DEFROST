@@ -233,3 +233,31 @@ ${siteText.slice(0, 8000)}
     { role: "user" as const, content: user },
   ];
 }
+
+// ---- Built-in "just fill in the blanks" follow-up template --------------------
+// A fixed, deterministic follow-up: no Calendly link, no model embellishment.
+// Selected via the Template dropdown; handled directly (no LLM call).
+export const FILL_BLANKS_TEMPLATE_ID = "__fillblanks__";
+
+export const FILL_BLANKS_TEMPLATE = `Hi {Recipient},
+
+Just wanted to follow up here, please let me know if you have the time to chat in the coming weeks!
+
+Best,
+{Writer}`;
+
+/** Turn "Alice Smith, Bob Jones" into "Alice and Bob" for the greeting. */
+export function recipientFirstNames(contactName: string): string {
+  const firsts = (contactName ?? "")
+    .split(",")
+    .map((s) => s.trim().split(/\s+/)[0])
+    .filter(Boolean);
+  if (firsts.length === 0) return (contactName ?? "").trim();
+  if (firsts.length === 1) return firsts[0];
+  if (firsts.length === 2) return `${firsts[0]} and ${firsts[1]}`;
+  return `${firsts.slice(0, -1).join(", ")}, and ${firsts[firsts.length - 1]}`;
+}
+
+export function fillBlanks(recipient: string, writer: string): string {
+  return FILL_BLANKS_TEMPLATE.replace(/\{Recipient\}/g, recipient).replace(/\{Writer\}/g, writer);
+}

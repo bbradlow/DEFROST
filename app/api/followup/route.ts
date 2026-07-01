@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { chatWithFallback } from "@/lib/openrouter";
-import { buildFollowupMessages } from "@/lib/prompts";
+import { buildFollowupMessages, FILL_BLANKS_TEMPLATE_ID, fillBlanks, recipientFirstNames } from "@/lib/prompts";
 
 function daysSince(iso: string): number {
   const ms = Date.now() - Date.parse(iso);
@@ -46,6 +46,12 @@ export async function POST(request: Request) {
   }
   if (wErr || !writer) {
     return NextResponse.json({ error: "Writer not found." }, { status: 400 });
+  }
+
+  // Built-in "just fill in the blanks" template: deterministic, no LLM, no extras.
+  if (body.promptId === FILL_BLANKS_TEMPLATE_ID) {
+    const draft = fillBlanks(recipientFirstNames(thread.contact_name), writer.name);
+    return NextResponse.json({ body: draft, modelUsed: "template" });
   }
 
   let extraInstructions: string | null = null;
