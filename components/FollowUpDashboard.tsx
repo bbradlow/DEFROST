@@ -326,7 +326,6 @@ export function FollowUpDashboard({
   }
 
   async function remove(id: string) {
-    if (!confirm("Delete this reminder?")) return;
     const prev = threads;
     setThreads((ts) => ts.filter((t) => t.id !== id));
     const { error } = await supabase.from("email_threads").delete().eq("id", id);
