@@ -32,6 +32,7 @@ export default async function FollowUpPage() {
           initialThreads={(threads ?? []) as EmailThread[]}
           writers={(writers ?? []) as Writer[]}
           followupPrompts={followupPrompts}
+          ownerEmail={user.email ?? ""}
           affinityReady={affinityConfigured()}
           calendlyReady={calendlyConfigured()}
           calendlyConnected={calendlyConnected}

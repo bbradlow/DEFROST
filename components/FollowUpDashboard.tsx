@@ -104,6 +104,7 @@ export function FollowUpDashboard({
   initialThreads,
   writers,
   followupPrompts,
+  ownerEmail,
   affinityReady,
   calendlyReady,
   calendlyConnected,
@@ -111,6 +112,7 @@ export function FollowUpDashboard({
   initialThreads: EmailThread[];
   writers: Writer[];
   followupPrompts: StylePrompt[];
+  ownerEmail: string;
   affinityReady: boolean;
   calendlyReady: boolean;
   calendlyConnected: boolean;
@@ -167,11 +169,14 @@ export function FollowUpDashboard({
   const [syncing, setSyncing] = useState<null | "affinity" | "calendly">(null);
   const [syncDebug, setSyncDebug] = useState<string | null>(null);
   const [affinityDays, setAffinityDays] = useState("30");
+  const [fromEmail, setFromEmail] = useState("");
 
   useEffect(() => {
     try {
       const d = localStorage.getItem("co:affinityDays");
       if (d) setAffinityDays(d);
+      const f = localStorage.getItem("co:affinityFrom");
+      if (f) setFromEmail(f);
     } catch {}
   }, []);
 
@@ -201,7 +206,10 @@ export function FollowUpDashboard({
       const res = await fetch("/api/affinity/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sinceDays: Math.max(1, Math.floor(Number(affinityDays) || 30)) }),
+        body: JSON.stringify({
+          sinceDays: Math.max(1, Math.floor(Number(affinityDays) || 30)),
+          fromEmail: fromEmail.trim() || undefined,
+        }),
       });
       const data = await res.json();
       if (data.debug) setSyncDebug(data.debug);
@@ -519,6 +527,23 @@ export function FollowUpDashboard({
             </span>
           )}
         </div>
+
+        {affinityReady && (
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-line bg-paper px-2 py-1 text-[11px] text-ink-faint">
+            <span>from</span>
+            <input
+              type="email"
+              className="inp h-6 w-52 px-1.5 py-0 text-[11px]"
+              value={fromEmail}
+              placeholder={ownerEmail || "you@firm.com"}
+              onChange={(e) => {
+                setFromEmail(e.target.value);
+                try { localStorage.setItem("co:affinityFrom", e.target.value); } catch {}
+              }}
+              title="Attribute outbound to this sender's address. Leave blank to use your Affinity key owner."
+            />
+          </span>
+        )}
 
         <span className="h-5 w-px bg-line" aria-hidden />
 

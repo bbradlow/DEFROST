@@ -28,7 +28,7 @@ export async function POST(request: Request) {
   }
 
   const ownerEmail = (user.email ?? "").trim().toLowerCase();
-  let body: { sinceDays?: number };
+  let body: { sinceDays?: number; fromEmail?: string };
   try {
     body = await request.json();
   } catch {
@@ -36,6 +36,7 @@ export async function POST(request: Request) {
   }
   const sinceDays = Math.max(1, Math.min(3650, body.sinceDays ?? 30));
   const sinceISO = daysAgoISO(sinceDays);
+  const customFrom = (body.fromEmail ?? "").trim().toLowerCase();
 
   const steps: string[] = [];
   const trace = (s: string) => {
@@ -60,10 +61,12 @@ export async function POST(request: Request) {
   }
   const keyEmail = (who.data.user.emailAddress ?? "").toLowerCase();
   trace(`whoami: ok tenant="${who.data.tenant?.name ?? "?"}" key owner=${keyEmail}`);
-  // We attribute "my" sent emails to the key owner (that's whose mailbox the
-  // key can see). If the DEFROST login differs, note it.
-  const meEmail = keyEmail || ownerEmail;
-  if (ownerEmail && keyEmail && ownerEmail !== keyEmail) {
+  // Attribute "my" sent emails to the custom sender if given, else the key owner
+  // (whose mailbox the key can see).
+  const meEmail = customFrom || keyEmail || ownerEmail;
+  if (customFrom) {
+    trace(`attributing outbound to custom sender: ${meEmail}`);
+  } else if (ownerEmail && keyEmail && ownerEmail !== keyEmail) {
     trace(`note: DEFROST login ${ownerEmail} differs from key owner ${keyEmail}; attributing to key owner`);
   }
 
