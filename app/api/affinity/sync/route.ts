@@ -121,51 +121,89 @@ export async function POST(request: Request) {
   }
 
   // 3) Aggregate per external contact: my last outbound + their last reply.
-  type Agg = { name: string; email: string; lastOut: string | null; lastIn: string | null; subject: string | null };
-  const byContact = new Map<string, Agg>();
   const isMe = (a: Attendee) =>
     (a.emailAddress ?? "").toLowerCase() === meEmail ||
     (a.person?.primaryEmailAddress ?? "").toLowerCase() === meEmail;
   const isInternal = (a: Attendee) => a.person?.type === "internal";
 
-  const upsertAgg = (a: Attendee, when: string, dir: "out" | "in", subject?: string | null) => {
-    const email = (a.emailAddress ?? a.person?.primaryEmailAddress ?? "").toLowerCase();
-    if (!email) return;
-    const cur =
-      byContact.get(email) ?? { name: attendeeName(a), email, lastOut: null, lastIn: null, subject: null };
-    if (dir === "out" && (!cur.lastOut || when > cur.lastOut)) {
-      cur.lastOut = when;
-      cur.subject = subject ?? cur.subject; // subject of my most recent outbound
-    }
-    if (dir === "in" && (!cur.lastIn || when > cur.lastIn)) cur.lastIn = when;
-    if (cur.name === email && attendeeName(a) !== email) cur.name = attendeeName(a);
-    byContact.set(email, cur);
+  // Free/personal mailbox domains: don't merge unrelated people who happen to
+  // share gmail.com etc. — group those by full address instead of by domain.
+  const PERSONAL_DOMAINS = new Set([
+    "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "outlook.com",
+    "hotmail.com", "live.com", "msn.com", "icloud.com", "me.com", "mac.com",
+    "aol.com", "proton.me", "protonmail.com", "pm.me", "gmx.com", "fastmail.com",
+  ]);
+  const domainOf = (email: string) => {
+    const at = email.lastIndexOf("@");
+    return at >= 0 ? email.slice(at + 1) : "";
   };
+  const groupKeyFor = (email: string) => {
+    const d = domainOf(email);
+    if (!d) return email;
+    return PERSONAL_DOMAINS.has(d) ? email : d;
+  };
+
+  // One reminder per company (corporate domain), or per person for personal domains.
+  type Grp = {
+    key: string;
+    domain: string | null; // corporate domain, or null for a personal-mailbox contact
+    names: Set<string>;
+    emails: Set<string>;
+    lastOut: string | null;
+    lastIn: string | null;
+    subject: string | null;
+  };
+  const groups = new Map<string, Grp>();
+  const getGroup = (email: string): Grp => {
+    const key = groupKeyFor(email);
+    let g = groups.get(key);
+    if (!g) {
+      const d = domainOf(email);
+      const corporate = !!d && !PERSONAL_DOMAINS.has(d);
+      g = { key, domain: corporate ? d : null, names: new Set(), emails: new Set(), lastOut: null, lastIn: null, subject: null };
+      groups.set(key, g);
+    }
+    return g;
+  };
+  const emailAddr = (a: Attendee) =>
+    (a.emailAddress ?? a.person?.primaryEmailAddress ?? "").toLowerCase();
 
   let myOutbound = 0;
   for (const e of feed.emails) {
     const dir = (e.direction ?? "").toLowerCase();
     if (dir === "sent") {
-      // Only count emails *I* sent.
+      // Only emails *I* sent drive which reminders (and names) exist.
       if (!isMe(e.from)) continue;
       myOutbound += 1;
       for (const to of [...e.toParticipantsPreview.data, ...e.ccParticipantsPreview.data]) {
         if (isMe(to) || isInternal(to)) continue; // skip myself + teammates
-        upsertAgg(to, e.sentAt, "out", e.subject);
+        const email = emailAddr(to);
+        if (!email) continue;
+        const g = getGroup(email);
+        g.emails.add(email);
+        const nm = attendeeName(to);
+        if (nm && nm.toLowerCase() !== email) g.names.add(nm);
+        if (!g.lastOut || e.sentAt > g.lastOut) {
+          g.lastOut = e.sentAt;
+          g.subject = e.subject ?? g.subject; // subject of my most recent outbound
+        }
       }
     } else {
-      // received: from = external contact, to = internal (possibly me)
+      // received: a reply from someone at the company marks the group answered.
       if (isMe(e.from) || isInternal(e.from)) continue;
-      upsertAgg(e.from, e.sentAt, "in");
+      const email = emailAddr(e.from);
+      if (!email) continue;
+      const g = getGroup(email);
+      if (!g.lastIn || e.sentAt > g.lastIn) g.lastIn = e.sentAt;
     }
   }
-  trace(`parsed: ${myOutbound} email(s) I sent; ${byContact.size} contact(s) touched`);
+  trace(`parsed: ${myOutbound} email(s) I sent; ${groups.size} group(s) touched`);
 
-  // Keep only contacts I actually emailed (have an outbound).
-  const contacts = [...byContact.values()].filter((c) => c.lastOut);
-  trace(`contacts with my outbound: ${contacts.length}`);
+  // Keep only groups I actually emailed (have an outbound).
+  const contacts = [...groups.values()].filter((g) => g.lastOut);
+  trace(`companies/contacts with my outbound: ${contacts.length}`);
 
-  // 4) Upsert into email_threads, deduped by source_ref = email:<contact>.
+  // 4) Upsert into email_threads, deduped by source_ref = grp:<company-or-email>.
   const { data: existing } = await supabase
     .from("email_threads")
     .select("id, source_ref, last_outbound_at, status");
@@ -176,20 +214,24 @@ export async function POST(request: Request) {
   let added = 0;
   let updated = 0;
   let answered = 0;
-  for (const c of contacts) {
-    const ref = `email:${c.email}`;
-    const replied = !!c.lastIn && (!c.lastOut || c.lastIn >= c.lastOut);
+  for (const g of contacts) {
+    const names = [...g.names].sort((a, b) => a.localeCompare(b));
+    const contactName = names.length ? names.join(", ") : [...g.emails][0] ?? g.key;
+    const contactEmail = g.emails.size === 1 ? [...g.emails][0] : null;
+    const ref = `grp:${g.key}`;
+    const replied = !!g.lastIn && (!g.lastOut || g.lastIn >= g.lastOut);
     const status = replied ? "answered" : "no_answer";
     if (replied) answered += 1;
     const ex = byRef.get(ref);
     if (!ex) {
       const { error } = await supabase.from("email_threads").insert({
         owner_id: user.id,
-        contact_name: c.name,
-        contact_email: c.email,
-        subject: c.subject,
-        last_outbound_at: c.lastOut,
-        last_inbound_at: c.lastIn,
+        contact_name: contactName,
+        contact_email: contactEmail,
+        company: g.domain,
+        subject: g.subject,
+        last_outbound_at: g.lastOut,
+        last_inbound_at: g.lastIn,
         status,
         source: "affinity",
         source_ref: ref,
@@ -201,10 +243,13 @@ export async function POST(request: Request) {
       const { error } = await supabase
         .from("email_threads")
         .update({
-          last_outbound_at: c.lastOut,
-          last_inbound_at: c.lastIn,
+          contact_name: contactName,
+          contact_email: contactEmail,
+          company: g.domain,
+          last_outbound_at: g.lastOut,
+          last_inbound_at: g.lastIn,
           status: newStatus,
-          ...(c.subject ? { subject: c.subject } : {}),
+          ...(g.subject ? { subject: g.subject } : {}),
         })
         .eq("id", ex.id);
       if (!error) updated += 1;

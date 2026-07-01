@@ -318,7 +318,7 @@ export function FollowUpDashboard({
   }
 
   async function remove(id: string) {
-    if (!confirm("Delete this thread?")) return;
+    if (!confirm("Delete this reminder?")) return;
     const prev = threads;
     setThreads((ts) => ts.filter((t) => t.id !== id));
     const { error } = await supabase.from("email_threads").delete().eq("id", id);
@@ -408,7 +408,7 @@ export function FollowUpDashboard({
       setAdd({ ...emptyAdd });
       setShowAdd(false);
     } catch (e) {
-      setBanner(e instanceof Error ? e.message : "Could not add thread.");
+      setBanner(e instanceof Error ? e.message : "Could not add reminder.");
     } finally {
       setSaving(false);
     }
@@ -430,7 +430,9 @@ export function FollowUpDashboard({
 
   return (
     <div>
-      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+      {/* Box 1 — title, actions, and sources */}
+      <section className="mb-5 rounded-xl border border-line bg-panel/40 p-4 sm:p-5">
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="eyebrow mb-1">Pipeline</p>
           <h1 className="text-2xl font-semibold tracking-tight">Follow-up reminders</h1>
@@ -470,7 +472,7 @@ export function FollowUpDashboard({
             </select>
           </div>
           <button className="btn btn-ghost" onClick={() => setShowAdd((s) => !s)}>
-            {showAdd ? "Close" : "+ Add thread"}
+            {showAdd ? "Close" : "+ Add reminder"}
           </button>
           <button
             className="btn btn-danger"
@@ -484,7 +486,7 @@ export function FollowUpDashboard({
       </div>
 
       {/* Sources */}
-      <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-line bg-panel px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg bg-paper px-4 py-3">
         <span className="text-xs font-medium uppercase tracking-wide text-ink-faint">
           Sources
         </span>
@@ -528,7 +530,7 @@ export function FollowUpDashboard({
             className="btn btn-ghost py-1 text-xs"
             disabled={syncing !== null}
             onClick={syncCalendly}
-            title="Match scheduled meetings to your threads"
+            title="Match scheduled meetings to your reminders"
           >
             {syncing === "calendly" ? "Syncing Calendly…" : "Sync meetings (Calendly)"}
           </button>
@@ -544,7 +546,7 @@ export function FollowUpDashboard({
       </div>
 
       {syncDebug && (
-        <details className="mb-4">
+        <details className="mt-3">
           <summary className="cursor-pointer text-[11px] text-ink-faint hover:text-ink">
             Last sync diagnostics
           </summary>
@@ -556,7 +558,7 @@ export function FollowUpDashboard({
 
       {/* Add form */}
       {showAdd && (
-        <div className="mb-5 grid gap-3 rounded-lg border border-line bg-panel p-4 sm:grid-cols-2">
+        <div className="mt-3 grid gap-3 rounded-lg border border-line bg-paper p-4 sm:grid-cols-2">
           <input className="inp" placeholder="Contact name" value={add.contact_name}
             onChange={(e) => setAdd({ ...add, contact_name: e.target.value })} />
           <input className="inp" placeholder="Contact email" value={add.contact_email}
@@ -585,14 +587,18 @@ export function FollowUpDashboard({
             onChange={(e) => setAdd({ ...add, snippet: e.target.value })} />
           <div className="sm:col-span-2">
             <button className="btn btn-primary" disabled={saving} onClick={addThread}>
-              {saving ? "Saving…" : "Add thread"}
+              {saving ? "Saving…" : "Add reminder"}
             </button>
           </div>
         </div>
       )}
+      </section>
+
+      {/* Box 2 — filters and the reminders list */}
+      <section className="rounded-xl border border-line bg-panel/40 p-4 sm:p-5">
 
       {/* Segment tabs as a segmented control */}
-      <div className="mb-3 inline-flex flex-wrap gap-1 rounded-lg border border-line bg-panel p-1">
+      <div className="mb-3 inline-flex flex-wrap gap-1 rounded-lg border border-line bg-paper p-1">
         {segTab("all", "All", counts.all)}
         {segTab("no_answer", "No answer", counts.no_answer)}
         {segTab("answered", "Answered", counts.answered)}
@@ -686,7 +692,7 @@ export function FollowUpDashboard({
       {/* Threads */}
       {visible.length === 0 ? (
         <div className="rounded-lg border border-dashed border-line bg-panel p-10 text-center text-sm text-ink-faint">
-          No threads here yet. Add one above (or connect Outlook/Affinity later).
+          No reminders here yet. Add one above, or sync from Affinity.
         </div>
       ) : (
         <div className="space-y-3">
@@ -775,6 +781,7 @@ export function FollowUpDashboard({
           })}
         </div>
       )}
+      </section>
     </div>
   );
 }
