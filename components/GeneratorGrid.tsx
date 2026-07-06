@@ -8,6 +8,7 @@ import {
   type Writer,
   type StylePrompt,
   type FoundersResult,
+  type Recipient,
 } from "@/lib/types";
 import { DEFAULT_BASE_PROMPT } from "@/lib/prompts";
 import { parseCsv } from "@/lib/csv";
@@ -226,15 +227,41 @@ export function GeneratorGrid({
   }
 
   // ---- Company list -> rows / CSV ------------------------------------------
-  // Each line is "Company" or "Company, website" (comma or tab separated).
-  function parseCompanyLines(text: string): { company: string; website: string }[] {
+  // Each line is, at minimum, "Company" or "Company, website". Optionally it can
+  // also carry two parenthesized lists — names then emails — e.g.:
+  //   MainFunc, www.mainfunc.ai, (Eric, John), (eric@mainfunc.ai, john@mainfunc.ai)
+  // Names pair with emails by position, so recipients are pre-filled (no auto-fill needed).
+  function parseCompanyLines(
+    text: string,
+  ): { company: string; website: string; recipients: Recipient[] }[] {
     return text
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter(Boolean)
       .map((line) => {
-        const parts = line.split(/[\t,]/).map((p) => p.trim());
-        return { company: parts[0] ?? "", website: parts[1] ?? "" };
+        // Pull out any (…) groups first so their internal commas don't split fields.
+        const groups: string[] = [];
+        const re = /\(([^)]*)\)/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(line))) groups.push(m[1]);
+
+        // The remaining "head" holds Company[, website].
+        const head = line.replace(/\([^)]*\)/g, "");
+        const headParts = head.split(/[\t,]/).map((p) => p.trim()).filter(Boolean);
+        const company = headParts[0] ?? "";
+        const website = headParts[1] ?? "";
+
+        const split = (g?: string) =>
+          g ? g.split(",").map((s) => s.trim()).filter(Boolean) : [];
+        const names = split(groups[0]);
+        const emails = split(groups[1]);
+        const count = Math.max(names.length, emails.length);
+        const recipients: Recipient[] = [];
+        for (let i = 0; i < count; i++) {
+          recipients.push({ name: names[i] ?? "", email: emails[i] ?? "" });
+        }
+
+        return { company, website, recipients };
       })
       .filter((x) => x.company);
   }
@@ -249,6 +276,7 @@ export function GeneratorGrid({
       newRow({
         company: p.company,
         website: p.website,
+        recipients: p.recipients,
         writerId: bulkWriterId || null,
       }),
     );
@@ -263,7 +291,11 @@ export function GeneratorGrid({
     });
     setCompanyList("");
     setShowList(false);
-    setBanner(`Added ${created.length} row${created.length === 1 ? "" : "s"} from your list.`);
+    const withRecips = created.filter((r) => r.recipients.length).length;
+    setBanner(
+      `Added ${created.length} row${created.length === 1 ? "" : "s"} from your list` +
+        (withRecips ? `, ${withRecips} with recipients pre-filled.` : "."),
+    );
   }
 
   // ---- Recipient extraction ------------------------------------------------
@@ -642,17 +674,21 @@ export function GeneratorGrid({
             Paste a company list (one per line)
           </label>
           <p className="mb-2 text-xs text-ink-faint">
-            Just company names, or <span className="font-mono">Company, website</span>{" "}
-            per line. Each becomes a row. Then click{" "}
-            <span className="font-medium">Auto-fill recipients (all)</span> — it
-            finds the website (if missing) and the founders, and pulls their
-            verified emails. Set one writer for all, then Generate.
+            One company per line: just a name, or{" "}
+            <span className="font-mono">Company, website</span>. To skip auto-fill,
+            add two lists in parentheses — names then emails:{" "}
+            <span className="font-mono">Company, website, (Eric, John), (eric@…, john@…)</span>.
+            Names pair with emails in order. Otherwise click{" "}
+            <span className="font-medium">Auto-fill recipients (all)</span> to find the
+            website and founders automatically. Set one writer, then Generate.
           </p>
           <textarea
             className="inp h-36 resize-y font-mono text-xs"
             value={companyList}
             onChange={(e) => setCompanyList(e.target.value)}
-            placeholder={"Northflank\nMetronome\nAirwallex, airwallex.com"}
+            placeholder={
+              "Northflank\nMetronome\nAirwallex, airwallex.com\nMainFunc, www.mainfunc.ai, (Eric, John), (eric@mainfunc.ai, john@mainfunc.ai)"
+            }
           />
           <div className="mt-2 flex flex-wrap gap-2">
             <button className="btn btn-primary" onClick={addFromList}>
