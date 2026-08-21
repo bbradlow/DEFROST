@@ -1,245 +1,182 @@
-# Cold Outreach Email Generator
+# DEFROST — Cold Outreach Email Generator
 
-Generate personalized cold-outreach emails in bulk, in a chosen **writer's**
-voice, and hand the whole batch off to whoever sends them.
+DEFROST (marketed in-app as "Activant — DEFROST") generates personalized
+cold-outreach emails in bulk, in a chosen **writer's** voice, and hands the
+batch off to whoever sends them. It also tracks sent threads and drafts
+follow-ups for ones that haven't gotten a reply.
 
 Built with **Next.js (App Router) + TypeScript + Tailwind**, **Supabase**
-(Postgres + Auth), and **OpenRouter** (free models). Deploys on **Vercel**.
+(Postgres + Auth, with row-level security), and **OpenRouter** (LLM access,
+defaults to free models). Deploys on **Vercel**.
 
 ---
 
 ## Core concepts
 
-- **Owner** — you, the signed-in user. Set automatically from the Supabase
-  session. Used for record ownership / row-level security and shown in the
-  header. The owner never appears in the email body.
-- **Writer** — the person who actually sends the email (e.g. your analyst).
-  Chosen per email from a dropdown backed by the `writers` table. Each email is
-  written in that writer's voice and signed off by them. A **"Set one writer
-  for all"** control applies one writer to every row in the batch.
+- **Owner** — the signed-in user. Set automatically from the Supabase
+  session; used for row-level security so each account only sees its own
+  data. The owner never appears in the email body.
+- **Writer** — the person who actually sends the email (e.g. an analyst).
+  Chosen per email from a dropdown backed by the `writers` table. Each email
+  is written in that writer's voice and signed off by them.
+- **Style prompt** — a reusable base instruction (per owner, per kind:
+  `outreach` or `followup`) that shapes tone/structure on top of the
+  per-row "additional info." Managed on the **Prompts** page, stored in
+  `style_prompts`.
+- **Email thread** — a tracked outbound email (manual entry, or synced from
+  Affinity) used to drive the **Follow-up** dashboard's reminders.
 
 ---
 
-## Defaults applied ([DEFAULT] choices from the brief)
+## Project structure
 
-These are in effect now. Each is reversible — see notes below to change.
+```
+app/                        Next.js App Router pages + API routes
+  page.tsx                  Generator page (default route "/")
+  writers/page.tsx          Writers admin page
+  prompts/page.tsx          Style-prompt admin page
+  follow-up/page.tsx        Follow-up dashboard page
+  login/page.tsx            Supabase email/password auth page
+  auth/callback/route.ts    Supabase auth callback handler
+  auth/signout/route.ts     Sign-out route
+  layout.tsx, globals.css   Root layout + global styles
+  api/
+    generate/route.ts       Generates an outreach email body via OpenRouter
+    founders/route.ts       Scrapes a company site + LLM-extracts likely
+                             founder/exec names, then looks up emails via
+                             RocketReach (if configured)
+    followup/route.ts       Drafts a follow-up email from a fixed template
+                             (no LLM) using a thread + writer
+    models/route.ts         Lists available free OpenRouter models
+    affinity/sync/route.ts  Pulls sent/received emails from Affinity and
+                             upserts them into email_threads
 
-1. **Writers are scoped per-owner.** Each owner only sees and manages their own
-   writers (enforced by RLS). *If you'd rather share one team-wide writer list,
-   see "Writer scope" below — it's a small change.*
-2. **Generated emails are not persisted.** They live in session state only
-   (kept tight). *To save batch history, an optional `batches`/`emails` schema
-   is included (commented out) in `supabase/schema.sql` — see "Saving batch
-   history."*
-3. **Default model = the OpenRouter free auto-router (`openrouter/free`).** It's
-   always the first option and is also the automatic fallback if a chosen model
-   errors. Free model IDs change often, so the list is fetched live and filtered
-   to free models rather than hardcoded. *Pick a specific free model from the
-   dropdown any time.*
-4. **Base style prompt** is provided as a sensible cold-outreach voice (concise,
-   specific, one clear ask, no subject line, signed by the writer). It's
-   **editable in the UI** (Generator page → "Base style prompt"). The default
-   wording lives in `lib/prompts.ts` (`DEFAULT_BASE_PROMPT`) — tune it there to
-   change the permanent default.
+components/                 Client React components used by the pages above
+  GeneratorGrid.tsx          Batch table UI: add/import rows, per-row and
+                              bulk generate, CSV import
+  EmailRow.tsx                One row of the generator grid
+  OutputAccordion.tsx         Collapsible per-email output + "copy all"
+  WritersAdmin.tsx            CRUD UI for writers
+  PromptsAdmin.tsx            CRUD UI for style prompts
+  FollowUpDashboard.tsx       Thread list, reminders, Affinity sync trigger,
+                              follow-up drafting
+  TopBar.tsx                  Site nav (Generator / Writers / Prompts /
+                              Follow-up) + owner display
 
-No subject lines are produced — body only, per the brief.
+lib/                        Server + shared logic, no UI
+  openrouter.ts              OpenRouter chat client, free-model listing,
+                              throttling/fallback helpers
+  prompts.ts                 Default base style prompt, prompt-building
+                              helpers, follow-up template filling
+  scrape.ts                  Best-effort server-side website text scraping
+                              (plain fetch, no headless browser)
+  rocketreach.ts              RocketReach client for recipient email lookup
+  csv.ts                      CSV import/export helpers (Papaparse)
+  format.ts                   Email/text formatting helpers
+  linkify.ts                  Turns plain-text URLs into links for display
+  types.ts                    Shared TypeScript types (Writer, StylePrompt,
+                              EmailThread, Recipient, row status, etc.)
+  integrations/affinity.ts    Affinity API v2 client (emails, attendees)
+  supabase/
+    client.ts                 Browser Supabase client (anon key)
+    server.ts                 Server Supabase client (route handlers)
+    middleware.ts              Session refresh helper used by middleware.ts
+
+middleware.ts                Next.js middleware wiring up Supabase session
+                              refresh on every request
+
+supabase/
+  schema.sql                  Base schema: writers, style_prompts,
+                              email_threads tables + RLS policies (plus a
+                              commented-out optional batches/emails schema
+                              for persisting generated batches)
+  migration_v2.sql .. v8.sql  Incremental migrations applied on top of the
+                              base schema (style prompts, email_threads,
+                              integration_tokens, etc.)
+
+types.ts                     Root-level type re-export/legacy types file
+public/                      Static assets (Activant logo, icons)
+.env.example                 Documented list of required/optional env vars
+```
 
 ---
 
-## Prerequisites
+## Pages / features
 
-- **Node.js 18.18+** (Node 20 LTS recommended)
-- A **Supabase** account (free tier is fine)
-- An **OpenRouter** account + API key (free tier is fine)
-- A **GitHub** account and a **Vercel** account for deploy
+- **Generator** (`/`) — one row per email. Add rows manually or import a
+  CSV, pick a writer per row (or set one writer for all), enter company +
+  website, auto-fill likely recipients, add free-text "additional info,"
+  then generate per row or in bulk (throttled). Output is a collapsible
+  list per email; "Copy all" formats the whole batch for handoff.
+- **Writers** (`/writers`) — add/edit the people emails are sent as (name,
+  email, optional title/signature/Calendly link).
+- **Prompts** (`/prompts`) — manage reusable base style prompts for outreach
+  and follow-up emails.
+- **Follow-up** (`/follow-up`) — dashboard of tracked email threads with
+  reminders (no answer / answered / meeting set), optional one-click sync
+  from Affinity, and template-based follow-up drafting.
+
+### Defaults / notable behavior
+
+- Writers, style prompts and threads are scoped per-owner via Postgres RLS.
+- Generated outreach emails are **not persisted** by default — they live in
+  session state only. An optional `batches`/`emails` schema is included
+  (commented out) in `supabase/schema.sql` if you want to persist them; the
+  `Recipient`/`EmailRow` shapes in `lib/types.ts` map to those columns.
+- Default generation model is the OpenRouter free auto-router
+  (`openrouter/free`); the model list is fetched live from `/api/models`
+  and filtered to free models rather than hardcoded.
+- No subject lines are produced — body only.
+- Follow-up drafts use a fixed template (`lib/prompts.ts`), not an LLM call.
+- Website scraping (`lib/scrape.ts`) is a plain server-side fetch, so
+  JS-heavy sites may yield little text; the UI flags weak extraction.
+- Free OpenRouter models are rate-limited (~20 requests/minute, ~200/day);
+  generation runs sequentially with throttling and failed rows can be
+  retried individually.
 
 ---
 
-## 1. Supabase setup
+## Environment variables
 
-1. Create a project at <https://supabase.com> → **New project**. Note the
-   database password.
-2. **Run the schema.** In the dashboard go to **SQL Editor → New query**, paste
-   the contents of [`supabase/schema.sql`](./supabase/schema.sql), and click
-   **Run**. This creates the `writers` table and its RLS policies.
-3. **Get your keys.** Go to **Project Settings → API**:
-   - `Project URL` → `NEXT_PUBLIC_SUPABASE_URL`
-   - `anon public` key → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - `service_role` key → `SUPABASE_SERVICE_ROLE_KEY` (**server-only secret**)
-4. **Auth settings.** Go to **Authentication → Providers → Email** and make sure
-   Email is enabled. For local dev you may want to turn **"Confirm email"** off
-   so you can sign in immediately; for production, leave confirmation on. Under
-   **Authentication → URL Configuration**, add your site URL(s) to the redirect
-   allowlist (e.g. `http://localhost:3000/**` and your Vercel URL `/**`) so
-   magic links / confirmations redirect correctly.
+See [`.env.example`](./.env.example) for the full documented list. Summary:
 
-## 2. OpenRouter setup
+| Variable | Required | Notes |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | yes | Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | yes | Public anon key, exposed to the browser (safe — RLS scopes data) |
+| `SUPABASE_SERVICE_ROLE_KEY` | yes | Server-only secret, never prefixed `NEXT_PUBLIC_` |
+| `OPENROUTER_API_KEY` | yes | Server-only, used for generation and founder extraction |
+| `OPENROUTER_APP_URL` / `OPENROUTER_APP_TITLE` | no | OpenRouter leaderboard attribution |
+| `ROCKETREACH_API_KEY` | no | Enables recipient email auto-fill; without it only names are found |
+| `FOUNDER_MODEL` | no | OpenRouter model slug for founder/exec extraction (defaults to Claude Haiku) |
+| `AFFINITY_API_KEY` | no | Enables the Affinity sync integration in the Follow-up dashboard |
 
-1. Sign in at <https://openrouter.ai> and create a key at
-   <https://openrouter.ai/keys>.
-2. Copy it into `OPENROUTER_API_KEY` (server-only — never exposed to the
-   browser). No credit card is needed for free models.
-3. Free models are rate-limited (~**20 requests/minute, ~200/day**). The app
-   generates **sequentially with throttling** and surfaces progress; failed
-   rows can be retried individually.
+Copy `.env.example` to `.env.local` and fill it in before running locally.
+`NEXT_PUBLIC_*` values are exposed to the browser; the service-role and API
+keys are read only in route handlers / server modules and never sent to the
+client.
 
-## 3. Environment variables
-
-Copy `.env.example` to `.env.local` and fill it in:
-
-```bash
-cp .env.example .env.local
-```
-
-```
-NEXT_PUBLIC_SUPABASE_URL=...
-NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-SUPABASE_SERVICE_ROLE_KEY=...       # server-only
-OPENROUTER_API_KEY=...              # server-only
-```
-
-`NEXT_PUBLIC_*` values are exposed to the browser (safe — RLS protects data).
-The two server-only keys are read only in route handlers / server code and are
-**never** sent to the client.
-
-## 4. Run locally
+## Running locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open <http://localhost:3000>. You'll be sent to `/login`. Create an account,
+Open <http://localhost:3000>. You're sent to `/login`; create an account,
 sign in, then add a writer on the **Writers** page before generating.
 
----
-
-## Using the app
-
-1. **Writers** page: add the senders (name, email, optional title/signature).
-2. **Generator** page:
-   - Add rows manually (**+ Add row**) or **Import CSV**.
-   - Pick a writer per row, or use **Set one writer for all**.
-   - Enter company + website. Click **Auto-fill from website** (per row) or
-     **Auto-fill recipients (all)** to pull up to 2 likely founders/leaders
-     (names only — fill emails in afterward).
-   - Put what the email should say in **Additional info** — this drives the
-     structure and angle on top of the base style.
-   - **Generate** per row, or **Generate all** (throttled).
-3. **Output**: each email is a collapsible block. **Copy** one, or **Copy all**
-   to get the whole batch formatted for handoff:
-
-   ```
-   jane@acme.com, sam@acme.com
-   Hi Jane and Sam,
-   [body...]
-
-
-
-   founder@beta.io
-   Hi Alex,
-   [body...]
-   ```
-
-   The top line is the recipient **emails** (comma-separated); if none are
-   filled in yet it falls back to recipient **names**. Emails are separated by
-   three blank lines.
-
-### CSV format
-
-Header row required:
-
-```
-writer, company, website, recipients, additional_info
-```
-
-- `writer` matches a writer by **name or email**; unmatched rows are flagged so
-  you can pick a writer manually.
-- `recipients` is optional (comma-separated names); leave blank to auto-pull.
-- Rows are validated and editable before generating.
-
----
-
-## Deploy
-
-### Push to GitHub
-
-```bash
-git init
-git add .
-git commit -m "Cold outreach email generator"
-git branch -M main
-git remote add origin https://github.com/<you>/<repo>.git
-git push -u origin main
-```
-
-`.env` / `.env.local` are git-ignored — secrets never get committed.
-
-### Deploy on Vercel
-
-1. Go to <https://vercel.com> → **Add New… → Project** and import the GitHub
-   repo. Framework preset auto-detects **Next.js**; default build settings
-   (`next build`) work as-is — no overrides needed.
-2. Under **Environment Variables**, add all four:
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - `SUPABASE_SERVICE_ROLE_KEY`
-   - `OPENROUTER_API_KEY`
-   (optionally `OPENROUTER_APP_URL` = your Vercel URL, `OPENROUTER_APP_TITLE`).
-3. **Deploy.** After it's live, add the Vercel URL to Supabase
-   **Authentication → URL Configuration** redirect allowlist (e.g.
-   `https://your-app.vercel.app/**`).
-
----
-
-## Changing the defaults
-
-### Writer scope (shared team list instead of per-owner)
-
-Per-owner is enforced by the RLS policies on `writers` and the `owner_id`
-column. To make writers shared across all authenticated users, replace the
-SELECT policy in `supabase/schema.sql` with one that allows any authenticated
-user to read, e.g.:
-
-```sql
-create policy "writers_select_all_authed" on public.writers
-  for select using (auth.role() = 'authenticated');
-```
-
-(You'd typically keep insert/update/delete owner-scoped, or relax them too.)
-Decide based on whether writers are personal or a shared roster.
-
-### Saving batch history
-
-The app keeps emails in session state only. To persist them, uncomment the
-`batches`/`emails` block at the bottom of `supabase/schema.sql`, re-run it, and
-add save/load calls (the browser Supabase client already enforces RLS). The
-`Recipient`/`EmailRow` shapes in `lib/types.ts` map directly to the `emails`
-columns.
-
-### Email voice
-
-Edit `DEFAULT_BASE_PROMPT` in `lib/prompts.ts` for the permanent default, or
-tweak it per session in the Generator UI.
-
----
+Database: run `supabase/schema.sql` (and any newer `migration_v*.sql` files
+not yet applied) against your Supabase project via the SQL editor before
+first use.
 
 ## How secrets are handled
 
-- All OpenRouter calls and the Supabase **service-role** client live only in
-  server route handlers (`app/api/*`) and `lib/` server modules.
-- The browser only ever uses the public anon key; **RLS** scopes every row to
+- All OpenRouter, RocketReach and Affinity calls, plus the Supabase
+  **service-role** client, live only in server route handlers (`app/api/*`)
+  and `lib/` server modules.
+- The browser only ever uses the public anon key; RLS scopes every row to
   its owner.
-- `OPENROUTER_API_KEY` and `SUPABASE_SERVICE_ROLE_KEY` are never prefixed with
-  `NEXT_PUBLIC_` and never reach the client.
-
-## Notes & limitations
-
-- **Website scraping is best-effort.** It's a plain server-side fetch (no
-  headless browser), so JS-heavy single-page sites may yield little text. The UI
-  flags weak extraction; always verify recipients and add email addresses
-  manually.
-- **Free-model rate limits** mean large batches take time (throttled to stay
-  under ~20/min). Failed attempts still count toward the daily quota.
-- Recipient extraction asks the model for **names only** and instructs it not to
-  invent people; treat results as suggestions.
+- `OPENROUTER_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ROCKETREACH_API_KEY`
+  and `AFFINITY_API_KEY` are never prefixed with `NEXT_PUBLIC_` and never
+  reach the client.
